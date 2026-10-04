@@ -50,3 +50,13 @@ El puerto previsto para la conexión MySQL/MariaDB es 3306.
 No se almacenan contraseñas, tokens ni otras credenciales reales en los archivos versionados.
 
 Las credenciales reales deberán mantenerse únicamente en el entorno donde se realice el despliegue.
+
+## Red Docker
+
+La configuración utiliza la red predeterminada creada automáticamente por Docker Compose.
+
+Los servicios definidos en `compose.yaml` se conectan a esta red para su comunicación interna. No se define una red Docker personalizada debido a que la base de datos se encuentra en un servidor independiente, VM-03-Ubuntu-BD (ID 106), y no dentro del mismo entorno de contenedores.
+
+La conexión entre EspoCRM y la base de datos externa se realizará mediante la red de la máquina virtual, utilizando la dirección del servidor definida en la variable `DB_HOST` del archivo `.env`.
+
+Para esta comunicación, VM-01-CRM-UBUN deberá tener conectividad hacia VM-03-Ubuntu-BD por el puerto 3306 de MySQL/MariaDB.
