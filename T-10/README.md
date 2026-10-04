@@ -1,6 +1,6 @@
 # T-10 · Automatización de remediación y RPA
 
-Archivos técnicos de la tarea T-10 (Proyecto Integrador II, ITI-625, G-03). La documentación, las capturas y las pruebas están en Confluence.
+Archivos técnicos de la tarea T-10 (Proyecto Integrador II, ITI-625, G-03). La documentación y las capturas están en Confluence.
 
 **Estado:** borrador de diseño. La implementación y validación en las VMs corresponde a T-24, T-28 y T-35.
 
