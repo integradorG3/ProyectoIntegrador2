@@ -1,6 +1,6 @@
 services:
   espocrm:
-    image: espocrm/espocrm:latest
+    image: espocrm/espocrm:10.0.9
     container_name: espocrm-ubuntu
 
     environment:
@@ -32,8 +32,8 @@ services:
       timeout: 20s
       retries: 3
 
-  espocrm-daemon:
-    image: espocrm/espocrm:latest
+    espocrm-daemon:
+    image: espocrm/espocrm:10.0.9
     container_name: espocrm-daemon
 
     volumes_from:
