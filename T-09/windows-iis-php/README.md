@@ -26,22 +26,49 @@ VM-04-Windows-BD (105)
 
 ## Componentes requeridos
 
-Para el despliegue se requiere:
+Para el despliegue de EspoCRM en VM-02-CRM-WIN se requiere:
 
-- IIS habilitado en Windows Server.
-- PHP compatible con la versión de EspoCRM utilizada.
-- IIS URL Rewrite.
-- Extensiones de PHP requeridas por EspoCRM.
-- Conectividad entre VM-02-CRM-WIN y VM-04-Windows-BD.
-- Acceso al puerto correspondiente del servicio de base de datos.
+### IIS
 
-## Base de datos independiente
+- Internet Information Services (IIS) habilitado en Windows Server.
+- IIS URL Rewrite instalado.
+- PHP integrado con IIS mediante FastCGI.
+- Configuración de `index.php` como documento predeterminado.
+- Reglas de reescritura configuradas mediante el archivo `web.config`.
+- El sitio de IIS deberá apuntar al directorio `public` de EspoCRM.
+- Se deberá configurar el directorio `client` como directorio virtual según la configuración recomendada para EspoCRM.
 
-La instancia de EspoCRM instalada en VM-02-CRM-WIN utilizará la base de datos alojada en VM-04-Windows-BD.
+### PHP
 
-La dirección IP definitiva, nombre de la base de datos, usuario y contraseña deberán configurarse durante el despliegue.
+EspoCRM requiere PHP 8.3 a 8.5.
 
-Las credenciales reales no deben almacenarse en este repositorio.
+Extensiones PHP requeridas:
+
+- pdo_mysql
+- gd con soporte FreeType
+- openssl
+- zip
+- mbstring
+- iconv
+- curl
+- xml
+- xmlwriter
+- exif
+- bcmath
+
+Valores mínimos recomendados en `php.ini`:
+
+- `max_execution_time = 180`
+- `max_input_time = 180`
+- `memory_limit = 256M`
+- `post_max_size = 50M`
+- `upload_max_filesize = 50M`
+
+### Base de datos
+
+La base de datos no se instalará en VM-02-CRM-WIN.
+
+EspoCRM se conectará al servidor independiente VM-04-Windows-BD (ID 105), por lo que deberá existir conectividad entre ambas máquinas virtuales y acceso al puerto correspondiente del servicio MySQL/MariaDB.
 
 ## web.config
 
