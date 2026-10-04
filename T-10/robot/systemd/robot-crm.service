@@ -1,0 +1,11 @@
+[Unit]
+Description=Pruebas sintéticas Robot Framework (EspoCRM A y B)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=rpa
+WorkingDirectory=/opt/rpa
+EnvironmentFile=/etc/rpa/crm.env
+ExecStart=/usr/local/bin/robot --outputdir /opt/rpa/resultados /opt/rpa/crm_synthetic.robot
