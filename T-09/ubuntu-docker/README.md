@@ -51,6 +51,12 @@ No se almacenan contraseñas, tokens ni otras credenciales reales en los archivo
 
 Las credenciales reales deberán mantenerse únicamente en el entorno donde se realice el despliegue.
 
+## Versión de EspoCRM
+
+La configuración de Docker Compose utiliza la imagen `espocrm/espocrm:10.0.9`.
+
+Se utiliza una versión específica de la imagen en lugar de la etiqueta `latest` para mantener un despliegue controlado y reproducible, evitando cambios automáticos de versión.
+
 ## Red Docker
 
 La configuración utiliza la red predeterminada creada automáticamente por Docker Compose.
@@ -60,3 +66,5 @@ Los servicios definidos en `compose.yaml` se conectan a esta red para su comunic
 La conexión entre EspoCRM y la base de datos externa se realizará mediante la red de la máquina virtual, utilizando la dirección del servidor definida en la variable `DB_HOST` del archivo `.env`.
 
 Para esta comunicación, VM-01-CRM-UBUN deberá tener conectividad hacia VM-03-Ubuntu-BD por el puerto 3306 de MySQL/MariaDB.
+
+
