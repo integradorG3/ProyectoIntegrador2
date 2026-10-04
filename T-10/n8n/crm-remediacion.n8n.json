@@ -1,0 +1,450 @@
+{
+  "name": "CRM - Remediacion controlada (T-10 borrador)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "crm-incidente",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "id": "n1",
+      "name": "Webhook Zabbix",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "crm-incidente",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REEMPLAZAR",
+          "name": "Token webhook Zabbix"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $json.body || $json;\nconst catalogo = {\n  crm_linux:   { host: '192.168.20.11', url: 'http://192.168.20.11:8080', tipos: ['http_down', 'container_down'] },\n  crm_windows: { host: '192.168.20.12', url: 'http://192.168.20.12',      tipos: ['http_down', 'service_down'] }\n};\nconst t = catalogo[b.target];\nconst tipo = b.incident_type || null;\nlet autorizado = false;\nlet motivo = '';\nif (!t) motivo = 'Objetivo no autorizado: ' + b.target;\nelse if (!tipo) motivo = 'El evento no trae incident_type';\nelse if (!t.tipos.includes(tipo)) motivo = 'Tipo de incidente no permitido para ' + b.target + ': ' + tipo;\nelse autorizado = true;\nreturn [{ json: {\n  target: b.target || null,\n  incident_type: tipo,\n  autorizado,\n  motivo,\n  url: t ? t.url : null,\n  host: t ? t.host : null,\n  t_detect: b.event_time || null,\n  t_inicio_n8n: new Date().toISOString()\n} }];"
+      },
+      "id": "n2",
+      "name": "Validar objetivo e incidente",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.autorizado }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "n3",
+      "name": "¿Incidente autorizado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Limite de reinicios por objetivo: maximo MAX en una ventana de VENTANA_MIN minutos.\n// Nota: el workflow debe estar ACTIVO (ejecuciones de produccion) para que static data persista.\nconst MAX = 2;\nconst VENTANA_MIN = 15;\nconst ventanaMs = VENTANA_MIN * 60 * 1000;\nconst estado = $getWorkflowStaticData('global');\nestado.reinicios = estado.reinicios || {};\nconst ahora = Date.now();\nconst d = $json;\nconst previos = (estado.reinicios[d.target] || []).filter(ts => ahora - ts < ventanaMs);\nconst permitido = previos.length < MAX;\nif (permitido) previos.push(ahora);\nestado.reinicios[d.target] = previos;\nconst minutosEspera = permitido ? 0 : Math.ceil((ventanaMs - (ahora - previos[0])) / 60000);\nreturn [{ json: { ...d, permitido, intentos_en_ventana: previos.length, max_reinicios: MAX, ventana_min: VENTANA_MIN, minutos_espera: minutosEspera } }];"
+      },
+      "id": "n4",
+      "name": "Control de reinicios",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.permitido }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "n5",
+      "name": "¿Dentro del límite?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        880,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.target }}",
+              "value2": "crm_linux"
+            }
+          ]
+        }
+      },
+      "id": "n6",
+      "name": "¿Es Linux?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "command": "sudo /usr/bin/docker restart espocrm-ubuntu",
+        "authentication": "privateKey"
+      },
+      "id": "n7",
+      "name": "Reiniciar contenedor (VM-01)",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        40
+      ],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "REEMPLAZAR",
+          "name": "SSH VM-01 n8n-remed"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "command": "powershell -NoProfile -Command \"Restart-Service W3SVC\"",
+        "authentication": "privateKey"
+      },
+      "id": "n8",
+      "name": "Reiniciar IIS (VM-02)",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        220
+      ],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "REEMPLAZAR",
+          "name": "SSH VM-02 n8n-remed"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 30,
+        "unit": "seconds"
+      },
+      "id": "n9",
+      "name": "Esperar 30 s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1540,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Control de reinicios').first().json.url }}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "n10",
+      "name": "Verificar HTTP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        120
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ !!($json.statusCode && $json.statusCode < 400) }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "n11",
+      "name": "¿Recuperado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1980,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "REEMPLAZAR_CHAT_ID",
+        "text": "=✅ RECUPERADO: {{ $('Control de reinicios').first().json.target }} ({{ $('Control de reinicios').first().json.incident_type }})\nInicio n8n: {{ $('Control de reinicios').first().json.t_inicio_n8n }}\nFin: {{ $now.toISO() }}\nHTTP: {{ $json.statusCode }}\nReinicios en ventana: {{ $('Control de reinicios').first().json.intentos_en_ventana }} de {{ $('Control de reinicios').first().json.max_reinicios }}",
+        "additionalFields": {}
+      },
+      "id": "n12",
+      "name": "Aviso: recuperado",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2200,
+        40
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REEMPLAZAR",
+          "name": "Telegram bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "REEMPLAZAR_CHAT_ID",
+        "text": "=❌ FALLO: {{ $('Control de reinicios').first().json.target }} sigue sin responder tras el reinicio.\nSe requiere intervencion humana.\nInicio n8n: {{ $('Control de reinicios').first().json.t_inicio_n8n }}\nFin: {{ $now.toISO() }}\nReinicios en ventana: {{ $('Control de reinicios').first().json.intentos_en_ventana }} de {{ $('Control de reinicios').first().json.max_reinicios }}",
+        "additionalFields": {}
+      },
+      "id": "n13",
+      "name": "Aviso: FALLO",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2200,
+        220
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REEMPLAZAR",
+          "name": "Telegram bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "REEMPLAZAR_CHAT_ID",
+        "text": "=⚠️ Incidente NO autorizado para remediacion automatica.\nMotivo: {{ $json.motivo }}\nObjetivo: {{ $json.target }} · Tipo: {{ $json.incident_type }}\nNo se reinicio ningun servicio.",
+        "additionalFields": {}
+      },
+      "id": "n14",
+      "name": "Aviso: incidente no autorizado",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        660,
+        460
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REEMPLAZAR",
+          "name": "Telegram bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "REEMPLAZAR_CHAT_ID",
+        "text": "=🛑 LIMITE DE REINICIOS alcanzado para {{ $json.target }}.\nMaximo {{ $json.max_reinicios }} reinicios en {{ $json.ventana_min }} min. Proximo intento automatico posible en ~{{ $json.minutos_espera }} min.\nSe requiere intervencion humana.",
+        "additionalFields": {}
+      },
+      "id": "n15",
+      "name": "Aviso: límite de reinicios",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1100,
+        360
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REEMPLAZAR",
+          "name": "Telegram bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Zabbix": {
+      "main": [
+        [
+          {
+            "node": "Validar objetivo e incidente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar objetivo e incidente": {
+      "main": [
+        [
+          {
+            "node": "¿Incidente autorizado?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Incidente autorizado?": {
+      "main": [
+        [
+          {
+            "node": "Control de reinicios",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aviso: incidente no autorizado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Control de reinicios": {
+      "main": [
+        [
+          {
+            "node": "¿Dentro del límite?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Dentro del límite?": {
+      "main": [
+        [
+          {
+            "node": "¿Es Linux?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aviso: límite de reinicios",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Es Linux?": {
+      "main": [
+        [
+          {
+            "node": "Reiniciar contenedor (VM-01)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reiniciar IIS (VM-02)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reiniciar contenedor (VM-01)": {
+      "main": [
+        [
+          {
+            "node": "Esperar 30 s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reiniciar IIS (VM-02)": {
+      "main": [
+        [
+          {
+            "node": "Esperar 30 s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Esperar 30 s": {
+      "main": [
+        [
+          {
+            "node": "Verificar HTTP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verificar HTTP": {
+      "main": [
+        [
+          {
+            "node": "¿Recuperado?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Recuperado?": {
+      "main": [
+        [
+          {
+            "node": "Aviso: recuperado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aviso: FALLO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
