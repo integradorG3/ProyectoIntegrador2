@@ -9,7 +9,6 @@ Archivos técnicos de la tarea T-10 (Proyecto Integrador II, ITI-625, G-03). La 
 ```
 T-10/
 ├── README.md
-├── .gitignore
 ├── n8n/
 │   ├── crm-remediacion.n8n.json
 │   ├── ejemplo-evento-zabbix.json
