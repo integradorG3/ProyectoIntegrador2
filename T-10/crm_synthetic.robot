@@ -90,3 +90,4 @@ Hacer Registro
     Fill Text    css=input[data-name='lastName']    ${apellido}
     Click        css=button[data-action='save']
     Wait For Elements State    css=.record    visible    timeout=${TIMEOUT}
+
