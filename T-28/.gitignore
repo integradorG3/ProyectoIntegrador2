@@ -1,0 +1,23 @@
+# ==========================================
+# T-28: Archivos excluidos del repositorio
+# ==========================================
+
+# Credenciales y secretos
+credenciales.py
+*.env
+*.secret
+*.key
+
+# Resultados de Robot Framework
+resultados/
+output.xml
+log.html
+report.html
+
+# Capturas de pantalla
+*.png
+selenium-screenshot-*.png
+
+# Python
+__pycache__/
+*.pyc
