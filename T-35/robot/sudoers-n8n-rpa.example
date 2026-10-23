@@ -1,0 +1,5 @@
+# VM-08: /etc/sudoers.d/n8n-rpa   (crear con: sudo visudo -f /etc/sudoers.d/n8n-rpa)
+# La cuenta n8n-rpa solo puede ejecutar el wrapper como usuario "rpa-runner", con A o B y SI o NO.
+n8n-rpa ALL=(rpa-runner) NOPASSWD: /opt/rpa/ejecutar_rpa.sh A, /opt/rpa/ejecutar_rpa.sh B, \
+                            /opt/rpa/ejecutar_rpa.sh A SI, /opt/rpa/ejecutar_rpa.sh A NO, \
+                            /opt/rpa/ejecutar_rpa.sh B SI, /opt/rpa/ejecutar_rpa.sh B NO
