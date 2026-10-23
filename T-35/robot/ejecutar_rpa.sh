@@ -10,12 +10,12 @@ REGISTRO="${2:-SI}"
 case "$AMB" in A|B) ;; *) echo '{"resultado":"ERROR","segundos":null,"pasos":[],"mensaje":"Uso: ejecutar_rpa.sh A|B [SI|NO]"}'; exit 2;; esac
 case "$REGISTRO" in SI|NO) ;; *) echo '{"resultado":"ERROR","segundos":null,"pasos":[],"mensaje":"El segundo argumento debe ser SI o NO"}'; exit 2;; esac
 
-ROBOT_BIN="${ROBOT_BIN:-/opt/rpa/venv/bin/robot}"
+ROBOT_BIN="${ROBOT_BIN:-/home/rpa-runner/.local/bin/robot}"
 RPA_DIR="${RPA_DIR:-/opt/rpa}"
 ENV_FILE="${ENV_FILE:-/etc/rpa/crm.env}"
 HIST="${HISTORIAL_CSV:-/var/log/rpa/rpa_resultados.csv}"
 LIMITE="${LIMITE_SEGUNDOS:-150}"
-export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/opt/rpa/browsers}"
+export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/home/rpa-runner/.local/lib/python3.12/site-packages/Browser/wrapper/node_modules/playwright-core/.local-browsers}"
 
 # Credenciales (CRM_USER_A/B, CRM_PASS_A/B) desde el archivo de entorno; nunca se imprimen.
 if [ -r "$ENV_FILE" ]; then set -a; . "$ENV_FILE"; set +a; fi
@@ -61,7 +61,6 @@ out = {"ambiente": os.environ["AMB"], "segundos": total, "pasos": pasos}
 if rc == 124:
     out.update(resultado="ERROR", mensaje="Tiempo maximo excedido; el RPA se detuvo")
 elif not pasos:
-    # Sin filas: casi siempre falta una credencial o Robot no pudo arrancar. Se busca la causa en su salida.
     causa = ""
     try:
         lineas = open(os.environ["ROBOT_OUT"], encoding="utf-8", errors="replace").read().splitlines()
