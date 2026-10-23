@@ -1,10 +1,9 @@
 *** Settings ***
 Documentation     Pruebas sinteticas de EspoCRM A (Ubuntu/Docker) y B (Windows/IIS).
 ...               Mide duracion y resultado de login, consulta y registro.
-...               Credenciales por variables de entorno CRM_USER y CRM_PASS (ver robot/.env.example).
+...               Credenciales por variables de entorno CRM_USER_A/B y CRM_PASS_A/B.
 ...               El historial de resultados se CONSERVA: cada ejecucion agrega filas al CSV
 ...               definido en HISTORIAL_CSV y nunca lo sobrescribe.
-...               VERIFICAR los selectores con F12 en la version instalada de EspoCRM.
 Library           Browser
 Library           DateTime
 Library           OperatingSystem
@@ -13,9 +12,11 @@ Suite Teardown    Close Browser
 
 *** Variables ***
 ${URL_A}            http://192.168.20.11:8080
-${URL_B}            http://192.168.20.12
-${USER}             %{CRM_USER}
-${PASS}             %{CRM_PASS}
+${URL_B}            http://192.168.20.12/espocrm
+${USER_A}           %{CRM_USER_A}
+${PASS_A}           %{CRM_PASS_A}
+${USER_B}           %{CRM_USER_B}
+${PASS_B}           %{CRM_PASS_B}
 ${TIMEOUT}          15s
 # Ruta fija y persistente, fuera de la carpeta de salida de Robot (que cambia en cada ejecucion).
 # Se puede cambiar con: robot --variable HISTORIAL_CSV:/ruta/archivo.csv crm_synthetic.robot
@@ -49,7 +50,7 @@ Flujo Completo
     [Arguments]    ${amb}    ${url}
     New Context
     New Page    ${url}
-    Medir Paso    ${amb}    login       Hacer Login       ${url}
+    Medir Paso    ${amb}    login       Hacer Login       ${url}    ${amb}
     Medir Paso    ${amb}    consulta    Hacer Consulta    ${url}
     Medir Paso    ${amb}    registro    Hacer Registro    ${url}
     [Teardown]    Close Context
@@ -60,7 +61,7 @@ Medir Paso
     ${estado}    ${msg}=    Run Keyword And Ignore Error    ${kw}    @{args}
     ${t1}=    Get Current Date    result_format=epoch
     ${dur}=    Evaluate    round(${t1} - ${t0}, 2)
-    ${msg}=    Evaluate    str($msg).replace(',', ';').replace('\n', ' ')
+    ${msg}=    Evaluate    str($msg).replace(',', ';').replace(chr(10), ' ')
     ${fecha}=    Get Current Date    result_format=%Y-%m-%d %H:%M:%S
     Append To File    ${HISTORIAL_CSV}    ${fecha},${amb},${paso},${estado},${dur},${msg}\n
     IF    '${estado}' == 'FAIL'
@@ -69,10 +70,15 @@ Medir Paso
     Should Be Equal    ${estado}    PASS    Fallo en ${paso} (ambiente ${amb}): ${msg}
 
 Hacer Login
-    [Arguments]    ${url}
+    [Arguments]    ${url}    ${amb}
     Go To    ${url}
-    Fill Text      id=field-userName    ${USER}
-    Fill Secret    id=field-password    $PASS
+    IF    '${amb}' == 'A'
+        Fill Text      id=field-userName    ${USER_A}
+        Fill Secret    id=field-password    $PASS_A
+    ELSE
+        Fill Text      id=field-userName    ${USER_B}
+        Fill Secret    id=field-password    $PASS_B
+    END
     Click          id=btn-login
     Wait For Elements State    css=.navbar    visible    timeout=${TIMEOUT}
 
