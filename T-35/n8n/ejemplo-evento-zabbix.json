@@ -1,0 +1,6 @@
+{
+  "target": "crm_linux",
+  "incident_type": "container_down",
+  "event_id": "1234",
+  "event_time": "2026.10.15 14:05:30"
+}
