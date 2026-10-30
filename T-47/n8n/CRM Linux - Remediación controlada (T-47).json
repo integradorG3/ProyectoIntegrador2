@@ -1,0 +1,586 @@
+{
+  "name": "CRM Linux - Remediación controlada (T-47)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "zabbix-alert",
+        "options": {}
+      },
+      "id": "3b7edd15-d438-4d62-ab19-e4b539b669d0",
+      "name": "Webhook Zabbix (Linux)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1312,
+        272
+      ],
+      "webhookId": "e0406852-c450-4ddb-8aa2-125523b7b3cf"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ===== CONFIGURACION =====\n// Este workflow atiende SOLO eventos de Linux.\nconst SO_FLUJO = 'linux';\n// Pasar a true SOLO cuando el reinicio de IIS este validado.\nconst WINDOWS_HABILITADO = true;\n// Zona horaria del servidor Zabbix (Costa Rica: UTC-6, sin horario de verano).\nconst TZ_ZABBIX = '-06:00';\n\nconst catalogo = {\n  crm_linux:   { ambiente: 'A', so: 'linux',   host: '192.168.20.11', url: 'http://192.168.20.11:8080', tipos: ['http_down', 'container_down'], remediar: true },\n  crm_windows: { ambiente: 'B', so: 'windows', host: '192.168.20.12', url: 'http://192.168.20.12',      tipos: ['http_down', 'service_down'],   remediar: WINDOWS_HABILITADO },\n  // Bases de datos: el flujo NO las reinicia (solo avisa). Estan en el catalogo para que el aviso sea claro.\n  db_linux:    { ambiente: null, so: 'linux',   host: '192.168.30.11', url: null, tipos: ['db_down'], remediar: false, motivoFijo: 'MariaDB Ubuntu (VM-03): solo alerta, sin reinicio automatico (por diseno)' },\n  db_windows:  { ambiente: null, so: 'windows', host: '192.168.30.12', url: null, tipos: ['db_down'], remediar: false, motivoFijo: 'MariaDB Windows (VM-04): solo alerta, sin reinicio automatico (por diseno)' }\n};\n\n// ---------- 1. Datos recibidos ----------\nconst raw = $json.body !== undefined ? $json.body : $json;\n\n// Busca un campo (target, incident_type, ...) en cualquier nivel del JSON recibido.\nfunction buscar(o, clave, nivel = 0) {\n  if (o === null || typeof o !== 'object' || nivel > 6) return null;\n  if (o[clave] !== undefined && o[clave] !== null && o[clave] !== '') return o[clave];\n  for (const k of Object.keys(o)) {\n    const r = buscar(o[k], clave, nivel + 1);\n    if (r !== null) return r;\n  }\n  return null;\n}\n// Todo el contenido recibido como texto (mensaje, asunto, nombre del trigger, host...).\nlet texto = '';\ntry { texto = typeof raw === 'string' ? raw : JSON.stringify(raw); } catch (e) { texto = String(raw); }\n// Zabbix puede mandar el cuerpo como un JSON dentro de un texto: se des-escapa para poder leerlo.\nconst plano = texto.replace(/\\\\n/g, '\\n').replace(/\\\\\"/g, '\"');\nconst bajo = plano.toLowerCase();\n\n// ---------- 2. Objetivo y tipo de incidente ----------\nlet target = buscar(raw, 'target');\nlet tipo = buscar(raw, 'incident_type');\nlet origen = 'campos';\n\nif (!target || !tipo) {\n  origen = 'texto';\n  target = null; tipo = null;\n  if (/mariadb|mysql/.test(bajo)) {\n    target = /windows/.test(bajo) ? 'db_windows' : 'db_linux';\n    tipo = 'db_down';\n  } else if (/\\biis\\b|w3svc/.test(bajo)) {\n    target = 'crm_windows'; tipo = 'service_down';\n  } else if (/windows/.test(bajo)) {\n    target = 'crm_windows'; tipo = 'http_down';\n  } else if (/ubuntu|linux|docker|contenedor|container|espocrm/.test(bajo)) {\n    target = 'crm_linux';\n    tipo = /contenedor|container|docker/.test(bajo) ? 'container_down' : 'http_down';\n  }\n}\n\n// ---------- 3. Evento de recuperacion: no se actua ----------\nconst estado = String(buscar(raw, 'event_value') ?? buscar(raw, 'status') ?? '').toLowerCase();\nconst esRecuperacion = ['0', 'ok', 'resolved', 'resuelto'].includes(estado)\n  || /has been resolved|\\bresolved\\b|\\bresuelto\\b|\\brecuperad[oa]\\b|\\brecovery\\b/.test(bajo);\n\n// ---------- 4. Autorizacion ----------\nconst t = target ? catalogo[target] : null;\nlet autorizado = false;\nlet motivo = '';\nif (esRecuperacion) motivo = 'Evento de recuperacion de Zabbix: no requiere accion';\nelse if (!t) motivo = 'No se reconocio el objetivo en el mensaje de Zabbix (target: ' + target + ')';\nelse if (!tipo) motivo = 'El evento no trae incident_type';\nelse if (t.so !== SO_FLUJO) motivo = 'Evento de ' + (t.so === 'windows' ? 'Windows' : 'Linux') + ' recibido en el flujo de ' + (SO_FLUJO === 'windows' ? 'Windows' : 'Linux') + ': no se actua aqui (revisar la accion de Zabbix)';\nelse if (!t.tipos.includes(tipo)) motivo = 'Tipo de incidente no permitido para ' + target + ': ' + tipo;\nelse if (!t.remediar) motivo = t.motivoFijo || ('Remediacion automatica de ' + target + ' deshabilitada: pendiente de validacion');\nelse autorizado = true;\n\n// ---------- 5. Hora del evento ----------\n// Si viene como campo (\"2026.10.26 14:05:30\") se usa; si no, se busca en el texto\n// (\"Problem started at 14:05:30 on 2026.10.26\"). Sin hora valida, el flujo usa la llegada del webhook.\nlet event_time = buscar(raw, 'event_time');\nif (!event_time) {\n  const h = plano.match(/(\\d{2}:\\d{2}:\\d{2})/);\n  const f = plano.match(/(\\d{4}[./-]\\d{2}[./-]\\d{2})/);\n  if (h && f) event_time = f[1].replace(/[/-]/g, '.') + ' ' + h[1];\n}\nlet t_evento_ms = null;\nif (event_time) {\n  const iso = String(event_time).trim().replace(/\\./g, '-').replace(' ', 'T') + TZ_ZABBIX;\n  const ms = Date.parse(iso);\n  if (!isNaN(ms)) t_evento_ms = ms;\n}\n\nlet event_id = buscar(raw, 'event_id');\nif (!event_id) { const m = plano.match(/(?:problem id|event id|id del evento)[^0-9]{0,20}(\\d+)/i); if (m) event_id = m[1]; }\n\nconst ahora = Date.now();\nreturn { json: {\n  target: target || null,\n  incident_type: tipo,\n  event_id: event_id || null,\n  event_time: event_time || null,\n  autorizado,\n  motivo,\n  clasificado_por: origen,\n  recibido: plano.replace(/\\s+/g, ' ').slice(0, 220),\n  ambiente: t ? t.ambiente : null,\n  so: t ? t.so : null,\n  url: t ? t.url : null,\n  host: t ? t.host : null,\n  t_evento_ms,\n  t_inicio_ms: ahora,\n  t_inicio_n8n: new Date(ahora).toISOString()\n} };\n"
+      },
+      "id": "9f0f34fd-0530-410d-9b74-6e4820f183a7",
+      "name": "Validar objetivo e incidente",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1088,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.autorizado }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "2aaf6abc-dd3c-4e59-a5cc-3bb7dbbbb431",
+      "name": "¿Incidente autorizado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -880,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Limite de reinicios por objetivo: maximo MAX en una ventana de VENTANA_MIN minutos.\n// Nota: el workflow debe estar ACTIVO (ejecuciones de produccion) para que static data persista.\nconst MAX = 2;\nconst VENTANA_MIN = 15;\nconst ventanaMs = VENTANA_MIN * 60 * 1000;\nconst estado = $getWorkflowStaticData('global');\nestado.reinicios = estado.reinicios || {};\nconst ahora = Date.now();\nconst d = $json;\nconst previos = (estado.reinicios[d.target] || []).filter(ts => ahora - ts < ventanaMs);\nconst permitido = previos.length < MAX;\nif (permitido) previos.push(ahora);\nestado.reinicios[d.target] = previos;\nconst minutosEspera = permitido ? 0 : Math.ceil((ventanaMs - (ahora - previos[0])) / 60000);\nreturn { json: { ...d, permitido, intentos_en_ventana: previos.length, max_reinicios: MAX, ventana_min: VENTANA_MIN, minutos_espera: minutosEspera } };"
+      },
+      "id": "fdfc8b5a-3a27-494b-898d-60886b66e41e",
+      "name": "Control de reinicios",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -656,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.permitido }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "aa44d90c-2dda-4b27-aab1-b718cd2c1742",
+      "name": "¿Dentro del límite?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -432,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "sudo /usr/bin/docker restart espocrm-ubuntu"
+      },
+      "id": "6f9def32-7f26-470c-a68c-a606a0b498f9",
+      "name": "Reiniciar contenedor (VM-01)",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "SON92GnY10iyzUyS",
+          "name": "SSH VM-01 n8n-remed"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Se ejecuta despues del SSH de reinicio (Linux o Windows).\nconst c = $('Control de reinicios').first().json;\nconst ssh = $json;   // salida del SSH: { stdout, stderr, code } o { error } si no pudo conectarse\nlet error = '';\nif (ssh.error) error = String(ssh.error.message || ssh.error);\nelse if (ssh.code !== 0 && ssh.code !== undefined) error = String(ssh.stderr || ssh.stdout || 'codigo ' + ssh.code);\nreturn { json: {\n  ...c,\n  t_reinicio_ms: Date.now(),\n  reinicio_ok: error === '',\n  reinicio_error: error.slice(0, 300)\n} };"
+      },
+      "id": "620dc539-0819-4cf4-b70d-fd1fced1409c",
+      "name": "Marcar hora del reinicio",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 30
+      },
+      "id": "5eb79ca2-5b62-44d2-9798-08b164348138",
+      "name": "Esperar 30 s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        448,
+        80
+      ],
+      "webhookId": "a92adb37-87b3-4694-8270-de9b21fab79c"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Marcar hora del reinicio').first().json.url }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 10000
+        }
+      },
+      "id": "4fc4ac1a-62f2-4637-8b0f-bf9296967c58",
+      "name": "Verificar HTTP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        80
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ !!($json.statusCode && $json.statusCode < 400) }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "f6191307-2828-4c3a-a16e-e3fdf8576f12",
+      "name": "¿HTTP correcto?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        880,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// El HTTP respondio bien: se anota la hora antes de lanzar el RPA.\nconst r = $('Marcar hora del reinicio').first().json;\nreturn { json: { ...r, t_http_ms: Date.now(), http_status: $json.statusCode } };"
+      },
+      "id": "6533d9ee-0ec0-4f86-8f7a-d0740b180ac7",
+      "name": "Marcar hora de HTTP OK",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=sudo -u rpa-runner /opt/rpa/ejecutar_rpa.sh {{ $('Marcar hora de HTTP OK').first().json.ambiente }}"
+      },
+      "id": "ec2fc140-6d12-4c0a-8ab7-67c6538b2df7",
+      "name": "Ejecutar RPA (VM-08)",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        1328,
+        0
+      ],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "BDbZaTl9C3gxEvAe",
+          "name": "SSH VM-08 n8n-rpa"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Resultado tras reiniciar, HTTP correcto y RPA ejecutado en VM-08.\nconst r = $('Marcar hora de HTTP OK').first().json;\nconst ssh = $json;   // salida del SSH a VM-08; la ultima linea de stdout es un JSON\nlet rpa = { resultado: 'ERROR', segundos: null, pasos: [] };\ntry {\n  const lineas = String(ssh.stdout || '').trim().split('\\n');\n  rpa = JSON.parse(lineas[lineas.length - 1]);\n} catch (e) {\n  rpa.mensaje = ssh.error\n    ? 'Error SSH: ' + String(ssh.error.message || ssh.error)\n    : 'Salida del RPA no interpretable: ' + String(ssh.stderr || ssh.stdout || '').slice(0, 200);\n}\nconst ahora = Date.now();\nconst ref = r.t_evento_ms != null ? r.t_evento_ms : r.t_inicio_ms;\nconst seg = (a, b) => (a == null || b == null) ? null : Math.round((b - a) / 100) / 10;\nconst tiempos = {\n  referencia: r.t_evento_ms != null ? 'evento Zabbix' : 'llegada del webhook',\n  accion: seg(ref, r.t_reinicio_ms),\n  recuperacion: seg(r.t_reinicio_ms, r.t_http_ms),\n  rpa: rpa.segundos != null ? rpa.segundos : null,\n  total: seg(ref, ahora)\n};\nconst f = v => v == null ? 'n/d' : v + ' s';\nconst rpa_ok = rpa.resultado === 'PASS';\nconst pasos = (rpa.pasos || []).map(p => p.paso + ': ' + p.resultado + ' (' + p.segundos + ' s)').join(' | ');\nconst encabezado = rpa_ok ? '✅ RECUPERADO' : '⚠️ RECUPERADO, PERO EL RPA FALLO';\nconst mensaje = [\n  encabezado + ': ' + r.target + ' (' + r.incident_type + ')',\n  'Evento Zabbix: ' + (r.event_time || 'sin hora; se usa la llegada del webhook'),\n  'Reinicio: ' + (r.reinicio_ok ? 'correcto' : 'con error: ' + r.reinicio_error) + ' | HTTP: ' + r.http_status,\n  'T-accion: ' + f(tiempos.accion) + ' | T-recuperacion: ' + f(tiempos.recuperacion) + ' | T-total: ' + f(tiempos.total),\n  'RPA ambiente ' + r.ambiente + ': ' + rpa.resultado + ' en ' + f(tiempos.rpa) + (pasos ? ' -> ' + pasos : ''),\n  rpa.mensaje ? 'Detalle RPA: ' + rpa.mensaje : null,\n  'Reinicios en ventana: ' + r.intentos_en_ventana + ' de ' + r.max_reinicios\n].filter(Boolean).join('\\n');\nreturn { json: { ...r, estado: rpa_ok ? 'RECUPERADO' : 'RECUPERADO_RPA_FALLA', rpa, rpa_ok, tiempos, mensaje } };"
+      },
+      "id": "fb7febf9-da4f-4a4f-a4c2-418e9dc471fb",
+      "name": "Armar resultado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// El HTTP no respondio bien tras el reinicio: no se ejecuta el RPA.\nconst r = $('Marcar hora del reinicio').first().json;\nconst http = $json;\nconst ahora = Date.now();\nconst ref = r.t_evento_ms != null ? r.t_evento_ms : r.t_inicio_ms;\nconst seg = (a, b) => (a == null || b == null) ? null : Math.round((b - a) / 100) / 10;\nconst tiempos = {\n  referencia: r.t_evento_ms != null ? 'evento Zabbix' : 'llegada del webhook',\n  accion: seg(ref, r.t_reinicio_ms),\n  recuperacion: null,\n  rpa: null,\n  total: seg(ref, ahora)\n};\nconst f = v => v == null ? 'n/d' : v + ' s';\nconst estadoHttp = http.statusCode !== undefined ? http.statusCode : 'sin respuesta';\nconst mensaje = [\n  '❌ FALLO: ' + r.target + ' (' + r.incident_type + ') sigue sin responder tras el reinicio.',\n  'Evento Zabbix: ' + (r.event_time || 'sin hora; se usa la llegada del webhook'),\n  'Reinicio: ' + (r.reinicio_ok ? 'ejecutado' : 'con error: ' + r.reinicio_error) + ' | HTTP: ' + estadoHttp,\n  'T-accion: ' + f(tiempos.accion) + ' | T-total hasta el fallo: ' + f(tiempos.total),\n  'Se requiere intervencion humana. El RPA no se ejecuto.',\n  'Reinicios en ventana: ' + r.intentos_en_ventana + ' de ' + r.max_reinicios\n].join('\\n');\nreturn { json: { ...r, estado: 'FALLO', tiempos, mensaje } };"
+      },
+      "id": "277c37ab-ef34-48e5-832c-7bfd15750791",
+      "name": "Armar resultado (fallo)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "-1004458995422",
+        "text": "={{ (s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'))($json.mensaje) }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "4429f56d-090f-421a-8dff-30ec6fd43178",
+      "name": "Aviso: resultado de la remediación",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1760,
+        0
+      ],
+      "webhookId": "e17f3f79-60ac-4879-9ca9-34eda5a861b2",
+      "credentials": {
+        "telegramApi": {
+          "id": "9jGEXyv6NsKleQxO",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "-1004458995422",
+        "text": "={{ (s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'))($json.mensaje) }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "f0f7cbd9-a371-4656-aa5b-c6912c24c020",
+      "name": "Aviso: FALLO",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1328,
+        208
+      ],
+      "webhookId": "bd2cc833-08d0-4c94-800f-a8e6dcb4c093",
+      "credentials": {
+        "telegramApi": {
+          "id": "9jGEXyv6NsKleQxO",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "REEMPLAZAR@correo.ejemplo",
+        "toEmail": "REEMPLAZAR@correo.ejemplo",
+        "subject": "=FALLO de remediacion: {{ $json.target }}",
+        "emailFormat": "text",
+        "text": "={{ $json.mensaje }}",
+        "options": {}
+      },
+      "id": "89b99268-a8ce-4656-a123-44372457c84a",
+      "name": "Correo: FALLO",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1552,
+        304
+      ],
+      "webhookId": "8296d8fc-6ea7-48bc-82b5-35e820e9b9e9",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "chatId": "-1004458995422",
+        "text": "={{ (s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'))('⚠️ Alerta SIN remediacion automatica.\\nMotivo: ' + $json.motivo + '\\nObjetivo: ' + ($json.target || '') + ' | Tipo: ' + ($json.incident_type || '') + '\\nEvento Zabbix: ' + ($json.event_time || '') + '\\nRecibido: ' + ($json.recibido || '') + '\\nNo se reinicio ningun servicio.') }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "beb33a01-151f-4af8-8d7e-777b8b76f3fd",
+      "name": "Aviso: sin remediación automática",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -656,
+        432
+      ],
+      "webhookId": "747945e1-5bc8-4ccf-920b-35719d6dbe8f",
+      "credentials": {
+        "telegramApi": {
+          "id": "9jGEXyv6NsKleQxO",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "-1004458995422",
+        "text": "={{ (s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'))('🛑 LIMITE DE REINICIOS alcanzado para ' + $json.target + '.\\nMaximo ' + $json.max_reinicios + ' reinicios en ' + $json.ventana_min + ' min. Proximo intento automatico posible en ~' + $json.minutos_espera + ' min.\\nSe requiere intervencion humana.') }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "1802da07-e727-4e03-bcf0-5ea8ade6d36d",
+      "name": "Aviso: límite de reinicios",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -208,
+        320
+      ],
+      "webhookId": "3aea3390-c9b3-4668-b5b9-1d3fdf4a2fd0",
+      "credentials": {
+        "telegramApi": {
+          "id": "9jGEXyv6NsKleQxO",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "REEMPLAZAR@correo.ejemplo",
+        "toEmail": "REEMPLAZAR@correo.ejemplo",
+        "subject": "=LIMITE DE REINICIOS: {{ $json.target }}",
+        "emailFormat": "text",
+        "text": "=Maximo {{ $json.max_reinicios }} reinicios en {{ $json.ventana_min }} min para {{ $json.target }}. Proximo intento automatico en ~{{ $json.minutos_espera }} min. Se requiere intervencion humana.",
+        "options": {}
+      },
+      "id": "5e6a9dd5-8ea2-4ab3-aef2-e1c85eedfade",
+      "name": "Correo: límite de reinicios",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        400
+      ],
+      "webhookId": "e40d66a5-9907-4fcf-ac86-09df50c39756",
+      "disabled": true
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Validar objetivo e incidente": {
+      "main": [
+        [
+          {
+            "node": "¿Incidente autorizado?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Incidente autorizado?": {
+      "main": [
+        [
+          {
+            "node": "Control de reinicios",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aviso: sin remediación automática",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Control de reinicios": {
+      "main": [
+        [
+          {
+            "node": "¿Dentro del límite?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Dentro del límite?": {
+      "main": [
+        [
+          {
+            "node": "Reiniciar contenedor (VM-01)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aviso: límite de reinicios",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Correo: límite de reinicios",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reiniciar contenedor (VM-01)": {
+      "main": [
+        [
+          {
+            "node": "Marcar hora del reinicio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marcar hora del reinicio": {
+      "main": [
+        [
+          {
+            "node": "Esperar 30 s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Esperar 30 s": {
+      "main": [
+        [
+          {
+            "node": "Verificar HTTP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verificar HTTP": {
+      "main": [
+        [
+          {
+            "node": "¿HTTP correcto?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿HTTP correcto?": {
+      "main": [
+        [
+          {
+            "node": "Marcar hora de HTTP OK",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Armar resultado (fallo)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marcar hora de HTTP OK": {
+      "main": [
+        [
+          {
+            "node": "Ejecutar RPA (VM-08)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ejecutar RPA (VM-08)": {
+      "main": [
+        [
+          {
+            "node": "Armar resultado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar resultado": {
+      "main": [
+        [
+          {
+            "node": "Aviso: resultado de la remediación",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar resultado (fallo)": {
+      "main": [
+        [
+          {
+            "node": "Aviso: FALLO",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Correo: FALLO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Zabbix (Linux)": {
+      "main": [
+        [
+          {
+            "node": "Validar objetivo e incidente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "b268ef67-6824-4a6b-9da8-90ed271f4df0",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "8cad5d78462c41d352c9deea5b632cff1897c08edd18eda67c0f09103cebce95"
+  },
+  "nodeGroups": [],
+  "id": "9Yjbjec8AECKIJBv",
+  "tags": []
+}
