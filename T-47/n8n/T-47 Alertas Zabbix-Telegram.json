@@ -1,0 +1,125 @@
+{
+  "name": "Alertas de Recursos Zabbix - Telegram",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "zabbix-alertas-telegram",
+        "options": {}
+      },
+      "id": "4fbba363-5e29-4366-92c5-6bdb6afb5e88",
+      "name": "Webhook Zabbix (Alertas)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        608,
+        1056
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Alertas de Zabbix a Telegram: clasifica en las 12 categorias pedidas y da formato. SOLO notifica (no reinicia nada).\n// ===== CONFIGURACION =====\nconst ENVIAR_NO_RECONOCIDAS = true;   // true: una alerta que no encaja en ninguna categoria se envia como \"OTRA ALERTA\"\nconst hora = ms => new Date(ms - 6 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' (CR)';\n\n// ---------- 1. Datos recibidos ----------\nconst raw0 = $json.body !== undefined ? $json.body : $json;\nlet raw = raw0;\nif (typeof raw0 === 'string') { try { raw = JSON.parse(raw0); } catch (_) { raw = { message: raw0 }; } }\nif (!raw || typeof raw !== 'object') raw = { message: String(raw ?? '') };\n// El campo \"message\" puede traer un JSON como texto: se abre y se mezcla.\nif (typeof raw.message === 'string' && raw.message.trim().startsWith('{')) {\n  try { const inner = JSON.parse(raw.message); if (inner && typeof inner === 'object') raw = { ...raw, ...inner, message: inner.message || '' }; } catch (_) {}\n}\nconst get = (...keys) => { for (const k of keys) if (raw[k] !== undefined && raw[k] !== null && String(raw[k]).trim() !== '') return String(raw[k]).trim(); return ''; };\nconst subject = get('subject', 'Subject', 'title', 'name');\nconst message = get('message', 'Message', 'description');\nconst opdata = get('opdata', 'detail', 'detalle');\nconst plain = message.replace(/\\\\r\\\\n|\\\\r|\\\\n/g, '\\n').replace(/\\r/g, '\\n');\n// Mensajes en texto libre de Zabbix: \"Host: X / Problema: Y / ...\"\nconst campo = k => { const r = plain.match(new RegExp('(?:^|\\\\n)\\\\s*' + k + '\\\\s*:\\\\s*([^\\\\n]+)', 'i')); return r ? r[1].trim() : ''; };\nconst host = get('host', 'hostname', 'host_name') || campo('Host') || 'Host no identificado';\nconst trigger = get('trigger', 'trigger_name', 'event_name') || campo('Problema') || campo('Problem')\n  || subject.replace(/^(PROBLEM|RECOVERY|RECOVERED|RESOLVED|OK|RECUPERADO|ALERTA[^:]*)\\s*:\\s*/i, '') || 'Evento Zabbix';\nconst severidad = get('severity', 'priority', 'severidad') || campo('Severidad');\nconst eventId = get('event_id', 'eventid');\n\n// ---------- 2. Problema o recuperacion ----------\nconst st = get('status', 'event_status', 'event_value', 'value').toLowerCase();\nconst recuperado = ['ok', 'recovered', 'recovery', 'resolved', 'resuelto', 'recuperado', 'recuperada', '0'].includes(st)\n  || /^(recovery|recovered|recuperad[oa]|resolved|resuelto|ok)\\b/i.test(subject)\n  || /estado\\s*:\\s*(recovery|recovered|ok|resolved)/i.test(plain);\n\n// ---------- 3. Categoria (por el NOMBRE del trigger, no por el host) ----------\nconst T = (trigger + ' ' + subject).toLowerCase();\nconst H = host.toLowerCase();\nconst is = re => re.test(T);\nconst equipoRed = /mikrotik|rb\\d{3,4}|sw-|switch|cisco|router|unifi|snmp/.test(H);\nconst so = /windows/.test(T + ' ' + H) ? ' WINDOWS' : (/ubuntu|linux|docker/.test(T + ' ' + H) ? ' UBUNTU' : '');\nlet categoria = null;\nif (is(/\\biis\\b|w3svc|world wide web publishing/)) categoria = 'IIS CAIDO';\nelse if (is(/backup|respaldo|copia de seguridad|vzdump/)) categoria = 'BACKUPS (FALLO O ANTIGUEDAD)';\nelse if (is(/slow quer|slow_quer|slow sql|consultas? lent|quer(y|ies).*(lent|slow)|long.?running|queries lentos|latencia.{0,20}sql|sql.{0,20}(latenc|lent|slow)/)) categoria = 'QUERIES SQL LENTOS';\nelse if (is(/(disk|disco|device|block).*(latenc|await|respon|too high|queue|cola)|latencia.*disco|r_await|w_await|i\\/o.*(wait|latenc)|request responses/)) categoria = 'LATENCIA DE DISCO';\nelse if (is(/respuesta lenta|tiempo de respuesta|response time|slow response|(crm|espocrm|http|web).*(lent|slow)/)) categoria = 'CRM CON RESPUESTA LENTA';\nelse if (is(/espocrm|crm/) && is(/no disponible|not available|unavailable|down|caid[oa]|fall/)) categoria = 'CAIDA DE ESPOCRM' + so;\nelse if (is(/mariadb|mysql|base de datos|database/) && is(/no disponible|not available|unavailable|down|caid[oa]|3306|fall/)) categoria = 'CAIDA DE MARIADB' + so;\nelse if (is(/\\bcpu\\b|processor|procesador|load average/)) categoria = 'CPU ALTA';\nelse if (is(/\\bram\\b|memory|memoria|swap/)) categoria = 'RAM ALTA';\nelse if (is(/disk space|filesystem|file system|espacio|storage|pused|vfs\\.fs|space is (low|critic)|used >|% used/)) categoria = is(/critical|critic|> ?9\\d|9\\d ?%/) ? 'DISCO CRITICO' : 'DISCO ALTO';\nelse if (is(/link down|operational status|ifoperstatus|interface.*down|interfaz.*(ca[ií]d|down)|port.*down/)) categoria = 'CAIDA DE INTERFAZ';\nelse if (is(/bandwidth|ancho de banda|error rate|errors|errores|interface|interfaz/)) categoria = 'RED: ANCHO DE BANDA / ERRORES';\nelse if (is(/snmp/) || (equipoRed && is(/icmp|ping|unreachable|not available|unavailable|no disponible|down|caid/))) categoria = 'PERDIDA DE SNMP / EQUIPO DE RED';\nelse if (is(/proxmox|hypervisor|\\bpve\\b|qemu|vm .*(not running|stopped|offline|ca[ií]d)|maquina virtual|máquina virtual|zabbix agent.*(not available|unavailable)|agent.*no disponible|unavailable by icmp|icmp.*(loss|ping)|ping/)) categoria = 'PROXMOX / VM CAIDA';\nconst reconocida = categoria !== null;\nif (!reconocida) categoria = 'OTRA ALERTA ZABBIX';\n\n// ---------- 4. Hora del evento ----------\nlet evTime = get('event_time', 'time');\nconst evDate = get('event_date', 'date');\nif (evDate && evTime && !/\\d{4}/.test(evTime)) evTime = evDate + ' ' + evTime;\nif (!evTime) {\n  const h = plain.match(/(\\d{2}:\\d{2}:\\d{2})/), f = plain.match(/(\\d{4}[./-]\\d{2}[./-]\\d{2})/);\n  if (h && f) evTime = f[1] + ' ' + h[1];\n}\n\n// ---------- 5. Mensaje ----------\nconst sev = severidad.toLowerCase();\nconst icono = recuperado ? '✅' : (/disaster|high|alta|critic|desastre/.test(sev) || /CRITICO|CAIDO|CAIDA/.test(categoria) ? '🔴' : (/average|media|warning|advertencia/.test(sev) ? '🟠' : '🚨'));\nconst detalle = (opdata || (plain && !/^\\s*(estado|host)\\s*:/i.test(plain) ? plain : '') || '').slice(0, 600);\nconst lineas = [\n  icono + (recuperado ? ' ALERTA RECUPERADA' : ' NUEVA ALERTA') + ': ' + categoria,\n  'Host: ' + host,\n  'Trigger: ' + trigger,\n  severidad ? 'Severidad: ' + severidad : null,\n  'Hora del evento: ' + (evTime ? evTime.replace('{EVENT.DATE}', '').replace('{EVENT.TIME}', '').trim() + ' (Zabbix)' : 'n/d'),\n  'Recibido en n8n: ' + hora(Date.now()),\n  eventId ? 'Evento Zabbix: ' + eventId : null,\n  detalle ? 'Detalle: ' + detalle : null\n].filter(Boolean);\nconst limpiar = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst enviar = reconocida || ENVIAR_NO_RECONOCIDAS;\nreturn { json: {\n  enviar, categoria, estado: recuperado ? 'RECUPERADO' : 'PROBLEM', host, trigger, severidad, event_id: eventId,\n  texto: lineas.map(limpiar).join('\\n'),\n  motivo_omitido: enviar ? '' : 'Evento no reconocido: revisar el nombre del trigger o el payload'\n} };\n"
+      },
+      "id": "73bd5b03-b446-4707-92c8-629bcd077408",
+      "name": "Clasificar y formatear alerta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        832,
+        1056
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "REEMPLAZAR_CHAT_ID",
+        "text": "={{ $json.texto }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "fb090d6a-282e-4249-a54b-409cf6cad11c",
+      "name": "Telegram: notificar alerta",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1280,
+        992
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REEMPLAZAR_ID_CREDENCIAL",
+          "name": "Telegram account (reemplazar)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.enviar }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "5140db12-fa9f-4b76-a0a0-c668a4b23dbd",
+      "name": "¿Enviar alerta?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1056,
+        1056
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook Zabbix (Alertas)": {
+      "main": [
+        [
+          {
+            "node": "Clasificar y formatear alerta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clasificar y formatear alerta": {
+      "main": [
+        [
+          {
+            "node": "¿Enviar alerta?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Enviar alerta?": {
+      "main": [
+        [
+          {
+            "node": "Telegram: notificar alerta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "nodeGroups": [],
+  "tags": []
+}
