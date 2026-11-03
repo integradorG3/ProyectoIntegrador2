@@ -22,6 +22,7 @@ Notas:
 * **Cómo se provocaron los fallos en P3 y P4:** se desactivó en n8n el nodo de reinicio (`Reiniciar contenedor (VM-01)` / `Reiniciar IIS (VM-02)`) y se detuvo el servicio a mano (`docker stop espocrm-ubuntu` / `Stop-Service W3SVC`). n8n no pudo recuperarlo, el HTTP no respondió y el flujo avisó por Telegram («Se requiere intervención humana») sin lanzar el RPA. Después se restauró el servicio a mano y se reactivó el nodo.
 * En P3 y P4 el aviso dice «Reinicio: ejecutado» y T-acción ≈ 0 s porque el nodo desactivado deja pasar los datos; **no hubo reinicio real**.
 * Metas de T-10 (T-acción ≤ 10 s, T-recuperación ≤ 120 s, T-total ≤ 3 min): cumplidas en los casos recuperados.
+* También se creo un flujo en n8n llamado "Alerta de Recursos Zabbix-Telegram" que recibe por webhook las alertas de Zabbix, las clasifica y las envía a un chat de Telegram. Solo notifica y no ejecuta remediaciones.
 
 ## Seguridad
 
