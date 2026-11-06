@@ -25,6 +25,5 @@ Notas:
 * También se creo un flujo en n8n llamado "Alerta de Recursos Zabbix-Telegram" que recibe por webhook las alertas de Zabbix, las clasifica y las envía a un chat de Telegram. Solo notifica y no ejecuta remediaciones.
 
 ## Seguridad
-
 Este directorio no contiene contraseñas, tokens ni `crm.env`. Las capturas están en Confluence.
 
