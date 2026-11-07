@@ -1,0 +1,250 @@
+Building configuration...
+
+Current configuration : 4807 bytes
+!
+! Last configuration change at 18:21:23 UTC Wed Mar 31 1993
+!
+version 15.2
+no service pad
+service timestamps debug datetime msec
+service timestamps log datetime msec
+no service password-encryption
+!
+hostname SW-G3-PRINCIPAL
+!
+boot-start-marker
+boot-end-marker
+!
+!
+username admin privilege 15 secret 9 <OMITIDO>
+no aaa new-model
+system mtu routing 1500
+vtp mode transparent
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+no ip domain-lookup
+ip domain-name integradorg3
+!
+!
+!
+spanning-tree mode rapid-pvst
+spanning-tree extend system-id
+!
+vlan internal allocation policy ascending
+!
+vlan 10
+ name ADMINISTRACION
+!
+vlan 20
+ name APLICACIONES
+!
+vlan 30
+ name BASE_DATOS
+!
+vlan 40
+ name SERVICIOS
+!
+vlan 50
+ name AUTOMATIZACION
+!
+vlan 60
+ name USUARIOS
+!
+!
+!
+!
+!
+!
+interface FastEthernet0/1
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+ spanning-tree bpduguard enable
+!
+interface FastEthernet0/2
+ description PRUEBA-VLAN10-ADMIN
+ switchport access vlan 10
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/3
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/4
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/5
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/6
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/7
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/8
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/9
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/10
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/11
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/12
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/13
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/14
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/15
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/16
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/17
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/18
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/19
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/20
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/21
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/22
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/23
+ description USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface FastEthernet0/24
+ description AP-UBIQUITI-VLAN60-USUARIOS
+ switchport access vlan 60
+ switchport mode access
+ spanning-tree portfast edge
+!
+interface GigabitEthernet0/1
+ description TRUNK-HACIA-MIKROTIK
+ switchport trunk allowed vlan 10,20,30,40,50,60
+ switchport mode trunk
+ switchport nonegotiate
+!
+interface GigabitEthernet0/2
+ description TRUNK-HACIA-PROXMOX
+ switchport trunk allowed vlan 10,20,30,40,50,60
+ switchport mode trunk
+ switchport nonegotiate
+!
+interface Vlan1
+ no ip address
+!
+interface Vlan10
+ ip address 192.168.10.2 255.255.255.0
+!
+ip default-gateway 192.168.10.1
+ip http server
+ip http secure-server
+ip ssh version 2
+!
+access-list 10 permit 192.168.40.11
+snmp-server group G3_ZABBIX_V3 v3 priv access 10
+snmp-server location Proyecto_Integrador_G3
+snmp-server contact Equipo-G3
+!
+line con 0
+line vty 0 4
+ exec-timeout 15 0
+ login local
+ transport input ssh
+line vty 5 15
+ exec-timeout 15 0
+ login local
+ transport input ssh
+!
+end
