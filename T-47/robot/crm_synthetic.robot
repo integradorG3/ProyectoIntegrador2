@@ -70,9 +70,10 @@ Medir Paso
     ${msg}=    Evaluate    str($msg).replace(',', ';').replace(chr(10), ' ')
     ${fecha}=    Get Current Date    result_format=%Y-%m-%d %H:%M:%S
     Append To File    ${HISTORIAL_CSV}    ${fecha},${amb},${paso},${estado},${dur},${msg}\n
-    IF    '${estado}' == 'FAIL'
-        Take Screenshot    filename=fallo_${amb}_${paso}
-    END
+    
+    # NUEVO: Tomar captura SIEMPRE, en la carpeta del reporte
+    Take Screenshot    filename=${OUTPUT DIR}/evidencia_${amb}_${paso}
+    
     Should Be Equal    ${estado}    PASS    Fallo en ${paso} (ambiente ${amb}): ${msg}
 
 Hacer Login
@@ -95,10 +96,39 @@ Hacer Consulta
 
 Hacer Registro
     [Arguments]    ${url}
-    ${epoch}=    Get Current Date    result_format=epoch
-    ${apellido}=    Set Variable    RPA-${epoch}
+    # 1. Listas separadas para nombre y apellido de los integrantes
+    @{nombres}=     Create List    Ivan    Monserrat    Estefania    Luis    Manuel    Fabricio
+    @{apellidos}=   Create List    Ramirez    Moreno    Mendez    Vasquez    Chavarria    Pena
+    @{dominios}=    Create List    gmail.com    hotmail.com    pi2.local
+    
+    # 2. Selección aleatoria basada en el tiempo
+    ${epoch}=       Get Current Date    result_format=epoch
+    ${epoch_int}=   Evaluate    int(${epoch})
+    ${indice_n}=    Evaluate    ${epoch_int} % 6
+    ${indice_d}=    Evaluate    ${epoch_int} % 3
+    
+    ${nombre}=      Set Variable    ${nombres}[${indice_n}]
+    ${apellido}=    Set Variable    ${apellidos}[${indice_n}]
+    ${correo}=      Set Variable    rpa.${epoch}@${dominios}[${indice_d}]
+    
+    # 3. Generamos un teléfono de 8 dígitos válido para evitar error "too long/short"
+    ${tel_short}=   Evaluate    str(${epoch_int})[:8]
+    ${telefono}=    Set Variable    +506 ${tel_short}
+    
     Go To    ${url}/#Contact/create
-    Wait For Elements State    css=input[data-name='lastName']    visible    timeout=${TIMEOUT}
-    Fill Text    css=input[data-name='lastName']    ${apellido}
-    Click        css=button[data-action='save']
+    
+    # 4. Esperamos a que el formulario cargue
+    Wait For Elements State    css=input[data-name='firstName']    visible    timeout=${TIMEOUT}
+    
+    # 5. Llenamos los campos usando los selectores exactos de EspoCRM
+    Fill Text    css=input[data-name='firstName']    ${nombre}
+    Fill Text    css=input[data-name='lastName']     ${apellido}
+    Fill Text    css=div[data-name='emailAddress'] input >> nth=0    ${correo}
+    Fill Text    css=input[data-intl-tel-input-id='0']    ${telefono}
+    
+    # 6. Damos un pequeño respiro para que el CRM valide
+    Sleep    1s
+    
+    # 7. Guardamos y verificamos
+    Click    css=button[data-action='save']
     Wait For Elements State    css=.record    visible    timeout=${TIMEOUT}
