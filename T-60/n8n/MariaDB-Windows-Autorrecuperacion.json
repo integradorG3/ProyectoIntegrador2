@@ -1,0 +1,377 @@
+{
+  "name": "Autorrecuperacion MariaDB Windows",
+  "nodes": [
+    {
+      "parameters": {
+        "amount": 30
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        992,
+        256
+      ],
+      "id": "dfa678e5-6601-4f10-b7b8-f34a8400383a",
+      "name": "Esperar recuperación",
+      "webhookId": "28e125fc-d879-486b-9d0c-bd0adc2c61d7"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.40.11/zabbix/api_jsonrpc.php",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json-rpc"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer REEMPLAZAR_TOKEN_ZABBIX"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"event.get\",\n  \"params\": {\n    \"output\": [\"eventid\", \"r_eventid\", \"name\"],\n    \"eventids\": [\n      \"{{$('Webhook Zabbix').item.json.body.eventid}}\"\n    ]\n  },\n  \"id\": 1\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1328,
+        256
+      ],
+      "id": "6d6be3fb-88d0-4749-924d-0e2626052a13",
+      "name": "Verificar recuperación en Zabbix"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.40.11/zabbix/api_jsonrpc.php",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json-rpc"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer REEMPLAZAR_TOKEN_ZABBIX"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"script.execute\",\n  \"params\": {\n    \"scriptid\": \"4\",\n    \"eventid\": \"{{$json.body.eventid}}\"\n  },\n  \"id\": 1\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        576,
+        256
+      ],
+      "id": "3b343a87-bcb0-49b1-a644-e87137d222f5",
+      "name": "Recuperación de la BD",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "zabbix-recuperacion-mariadb-windows",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        112,
+        256
+      ],
+      "id": "022822c2-8c8c-48dc-bfa0-6aa2af6b8246",
+      "name": "Webhook Zabbix",
+      "webhookId": "803fbe82-5e3b-44e4-892b-4750e1d2ee90"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "5b267bee-d69c-45e6-9eb4-f1da7d630f43",
+              "leftValue": "={{ Number($json.result?.[0]?.r_eventid ?? 0) > 0 }}",
+              "rightValue": "={{ true }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1744,
+        112
+      ],
+      "id": "37ce4780-6f3d-40ac-9102-68900ab622b7",
+      "name": "¿MariaDB recuperada?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "5b267bee-d69c-45e6-9eb4-f1da7d630f43",
+              "leftValue": "={{ Number($json.intento ?? $json.intentos_en_ventana ?? 0) }}",
+              "rightValue": "={{ Number($json.max ?? $json.max_reinicios ?? 4) }}",
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1760,
+        576
+      ],
+      "id": "202dfa75-d715-4582-aee2-d1915c1f911d",
+      "name": "¿QUEDAN INTENTOS?"
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1232,
+        576
+      ],
+      "id": "d66e4a42-377b-4d37-a9f7-1b42cf5a697f",
+      "name": "ESPERAR REINTENTO",
+      "webhookId": "341c64aa-effe-476d-85a1-6ae91e474a2b"
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $json;\n\n// ==================================================\n// CONTADOR DE INTENTOS - MARIADB WINDOWS\n// ==================================================\n\nconst intentoAnterior =\n  Number(j.intento ?? 0);\n\nconst intentoActual =\n  intentoAnterior + 1;\n\n\n// ==================================================\n// MAXIMO FIJO DE INTENTOS\n// ==================================================\n\nconst maxIntentos = 4;\n\n\n// ==================================================\n// SALIDA\n// ==================================================\n\nreturn {\n  json: {\n\n    ...j,\n\n    intento:\n      intentoActual,\n\n    intentos_en_ventana:\n      intentoActual,\n\n    max:\n      maxIntentos,\n\n    max_reinicios:\n      maxIntentos\n\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        368,
+        256
+      ],
+      "id": "4ceb0438-4da1-4a91-8bf4-b2ccae5f7295",
+      "name": "Control de reintentos"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ==================================================\n// RESTAURAR CONTEXTO DEL INTENTO\n// MariaDB Windows - T200\n// ==================================================\n\n// Respuesta recibida desde Zabbix\nconst verificacionZabbix = $json;\n\n// Datos del intento actual antes de entrar\n// a los nodos HTTP\nconst contexto =\n  $('Control de reintentos').last().json;\n\n// Número actual de intento\nconst intentoActual =\n  Number(contexto.intento ?? 1);\n\n// Máximo fijo\nconst maxIntentos = 4;\n\n\n// ==================================================\n// COMBINAR CONTEXTO + RESPUESTA ZABBIX\n// ==================================================\n\nreturn {\n  json: {\n\n    // Datos originales:\n    // host, trigger, eventid, etc.\n    ...contexto,\n\n    // Respuesta de event.get de Zabbix\n    ...verificacionZabbix,\n\n    // Restauramos explícitamente el contador\n    intento:\n      intentoActual,\n\n    intentos_en_ventana:\n      intentoActual,\n\n    max:\n      maxIntentos,\n\n    max_reinicios:\n      maxIntentos\n\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1536,
+        144
+      ],
+      "id": "b87605e8-c89c-48b1-86aa-40428725caba",
+      "name": "Restaurar contexto de intento"
+    },
+    {
+      "parameters": {
+        "chatId": "REEMPLAZAR_CHAT_ID",
+        "text": "=✅ T200 - MariaDB Windows RECUPERADA  Host: MariaDB-Windows Servicio: MariaDB Acción: Inicio automático mediante Zabbix Agent 2 Estado: Recuperado correctamente Event ID: {{ $('Webhook Zabbix').item.json.body.eventid }} Hora: {{ $now.toISO() }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1952,
+        -80
+      ],
+      "id": "68dedf31-cb7c-45ea-b6d6-28723f84bea0",
+      "name": "Mensaje de Recuperación",
+      "webhookId": "17384038-26d2-4cde-bb2e-1abde1e61b02",
+      "credentials": {
+        "telegramApi": {
+          "id": "REEMPLAZAR",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "REEMPLAZAR_CHAT_ID",
+        "text": "=🚨 T200 - INTERVENCIÓN MANUAL REQUERIDA\n\nHost: {{$json.host}}\nServicio: MariaDB\nCategoría: {{$json.categoria ?? 'CAIDA DE MARIADB'}}\n\nAcción automática:\nInicio de MariaDB mediante Zabbix Agent 2\n\nResultado:\nLa recuperación automática falló después de {{$json.intento ?? $json.intentos_en_ventana}} de {{$json.max ?? $json.max_reinicios ?? 4}} intentos.\n\nEvent ID:\n{{$json.eventid}}\n\nÚltima verificación:\nEl problema continúa activo en Zabbix.\n\nEstado:\n❌ NO RECUPERADO\n\n⚠️ Se requiere intervención manual del administrador.",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2128,
+        608
+      ],
+      "id": "551e718c-4dab-4a63-8faa-a02c9e410c75",
+      "name": "Mensaje de Fallo de Recuperación",
+      "webhookId": "0baaf632-f767-4b72-a691-7a2163b24bfc",
+      "credentials": {
+        "telegramApi": {
+          "id": "REEMPLAZAR",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Esperar recuperación": {
+      "main": [
+        [
+          {
+            "node": "Verificar recuperación en Zabbix",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recuperación de la BD": {
+      "main": [
+        [
+          {
+            "node": "Esperar recuperación",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Zabbix": {
+      "main": [
+        [
+          {
+            "node": "Control de reintentos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verificar recuperación en Zabbix": {
+      "main": [
+        [
+          {
+            "node": "Restaurar contexto de intento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿MariaDB recuperada?": {
+      "main": [
+        [
+          {
+            "node": "Mensaje de Recuperación",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "¿QUEDAN INTENTOS?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿QUEDAN INTENTOS?": {
+      "main": [
+        [
+          {
+            "node": "ESPERAR REINTENTO",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mensaje de Fallo de Recuperación",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Control de reintentos": {
+      "main": [
+        [
+          {
+            "node": "Recuperación de la BD",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ESPERAR REINTENTO": {
+      "main": [
+        [
+          {
+            "node": "Control de reintentos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restaurar contexto de intento": {
+      "main": [
+        [
+          {
+            "node": "¿MariaDB recuperada?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "nodeGroups": [],
+  "tags": []
+}

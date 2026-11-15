@@ -1,0 +1,714 @@
+{
+  "name": "Autorrecuperacion BD MariaDB UBUNTU",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "zabbix-recuperacion-bd",
+        "options": {}
+      },
+      "id": "26c90301-dbd8-4ff7-9bda-8eee236734f9",
+      "name": "Webhook Zabbix (BD MariaDB)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -2256,
+        608
+      ],
+      "webhookId": "3d518f61-c8cc-4ebc-8ad8-bafed5b1e537"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ===== CONFIGURACION DEL FLUJO (editar solo esta parte) =====\nconst FLUJO = \"Autorrecuperacion BD MariaDB - T-200\";\n// Un objetivo por equipo/servicio. host = texto (regex) que debe aparecer en el nombre del host de Zabbix.\n// {P} dentro de un comando se reemplaza por el parametro extraido del trigger (interfaz, VM, etc.).\nconst OBJETIVOS = {\n  \"db_ubuntu\": {\n    \"host\": \"mariadb.*(ubuntu|linux)\",\n    \"so\": \"linux\",\n    \"etiqueta\": \"MariaDB Ubuntu (VM-03)\",\n    \"diag\": \"echo \\\"load1=$(cut -d' ' -f1 /proc/loadavg)\\\"; echo \\\"cores=$(nproc)\\\"; echo \\\"mem_disp_pct=$(awk '/MemTotal/{t=$2}/MemAvailable/{a=$2}END{printf \\\"%d\\\",a*100/t}' /proc/meminfo)\\\"; echo \\\"disco_pct=$(df -P / | awk 'NR==2{gsub(\\\"%\\\",\\\"\\\",$5);print $5}')\\\"; echo \\\"top=$(ps -eo comm --sort=-%cpu | sed -n '2,4p' | tr '\\\\n' ',')\\\"\",\n    \"reinicio\": \"sudo /usr/bin/systemctl restart mariadb\",\n    \"verif\": \"systemctl is-active --quiet mariadb && ss -ltn | grep -q ':3306 ' && echo active || echo inactive\",\n    \"esperado\": \"active\"\n  },\n  \"db_windows\": {\n    \"host\": \"mariadb.*windows\",\n    \"so\": \"windows\",\n    \"etiqueta\": \"MariaDB Windows (VM-04)\",\n    \"diag\": \"$c=(Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average; $o=Get-CimInstance Win32_OperatingSystem; $m=[int](100*$o.FreePhysicalMemory/$o.TotalVisibleMemorySize); $d=Get-PSDrive C; $dp=[int](100*$d.Used/($d.Used+$d.Free)); \\\"cpu_pct=$c\\\"; \\\"mem_disp_pct=$m\\\"; \\\"disco_pct=$dp\\\"; $t=(Get-Process | Sort-Object CPU -Descending | Select-Object -First 3 | ForEach-Object { $_.ProcessName }) -join ','; \\\"top=$t\\\"\",\n    \"reinicio\": \"Restart-Service -Name MariaDB -Force\",\n    \"verif\": \"if ((Get-Service -Name MariaDB).Status -eq 'Running' -and (Test-NetConnection -ComputerName localhost -Port 3306 -WarningAction SilentlyContinue).TcpTestSucceeded) { 'Running' } else { 'NoActivo' }\",\n    \"esperado\": \"Running\"\n  }\n};\n// Reglas: que triggers atiende este flujo y que hace con cada uno.\n// tipo: \"servicio_caido\" = reiniciar siempre | \"lento\" = reiniciar si el diagnostico se pudo ejecutar | \"diagnostico\" = solo avisar con diagnostico\n// solo_diagnostico (en un objetivo): ese equipo nunca se reinicia ni se modifica, solo se diagnostica.\n// param: regex con un grupo que extrae del trigger (nombre de interfaz, VM...). permitidos: lista de valores permitidos (seguridad).\nconst REGLAS = [\n  {\n    \"categoria\": \"QUERIES SQL LENTOS\",\n    \"trigger\": \"slow quer|consultas? lent|quer(y|ies)|latencia.{0,20}sql|sql.{0,20}(latenc|lent|slow)\",\n    \"tipo\": \"lento\",\n    \"max\": 2,\n    \"ventana_min\": 30,\n    \"espera_s\": 30\n  },\n  {\n    \"categoria\": \"CAIDA DE MARIADB\",\n    \"trigger\": \"(mariadb|mysql|3306|base de datos).*(no disponible|not available|unavailable|\\\\bdown\\\\b|not running|ca[ií]d|service is down)|db_down\",\n    \"tipo\": \"servicio_caido\",\n    \"max\": 2,\n    \"ventana_min\": 15,\n    \"espera_s\": 30\n  }\n];\nconst TZ_ZABBIX = '-06:00';   // Costa Rica, sin horario de verano\n// ============================================================\n\nconst raw0 = $json.body !== undefined ? $json.body : $json;\nlet raw = raw0;\nif (typeof raw0 === 'string') { try { raw = JSON.parse(raw0); } catch (_) { raw = { message: raw0 }; } }\nif (!raw || typeof raw !== 'object') raw = { message: String(raw ?? '') };\nif (typeof raw.message === 'string' && raw.message.trim().startsWith('{')) {\n  try { const inner = JSON.parse(raw.message); if (inner && typeof inner === 'object') raw = { ...raw, ...inner, message: inner.message || '' }; } catch (_) {}\n}\nconst limpiar = s => String(s || '').replace(/\\{[A-Z_.]+\\}/g, '').replace(/\\s+/g, ' ').trim();\nconst get = (...keys) => { for (const k of keys) if (raw[k] !== undefined && raw[k] !== null && limpiar(raw[k]) !== '') return limpiar(raw[k]); return ''; };\nconst host = get('host', 'hostname', 'host_name');\nconst trigger = get('trigger', 'trigger_name', 'event_name');\nconst subject = get('subject', 'Subject', 'title');\nconst eventTime = get('event_time');\nconst st = get('status', 'event_status', 'event_value', 'value').toLowerCase();\nconst recuperado = ['ok', 'recovered', 'recovery', 'resolved', 'resuelto', 'recuperado', 'recuperada', '0'].includes(st)\n  || /^(recovery|recovered|recuperad[oa]|resolved|resuelto|ok)\\b/i.test(subject);\n\n// ---------- regla y objetivo ----------\nconst T = trigger + ' ' + subject;\nconst regla = REGLAS.find(r => new RegExp(r.trigger, 'i').test(T)) || null;\nlet targetKey = null;\nfor (const k of Object.keys(OBJETIVOS)) if (new RegExp(OBJETIVOS[k].host, 'i').test(host)) { targetKey = k; break; }\nconst obj = targetKey ? OBJETIVOS[targetKey] : null;\n\n// ---------- parametro (interfaz, VM...) ----------\nlet param = '', paramOk = true;\nif (regla && regla.param) {\n  const m = T.match(new RegExp(regla.param, 'i'));\n  param = m ? String(m[1] || '').trim() : '';\n  if (regla.mapa && param) { const k = Object.keys(regla.mapa).find(x => x.toLowerCase() === param.toLowerCase()); param = k ? String(regla.mapa[k]) : ''; }\n  else if (regla.permitidos && param) { const k = regla.permitidos.find(x => x.toLowerCase() === param.toLowerCase()); param = k || ''; }\n  paramOk = /^[A-Za-z0-9_.\\/-]+$/.test(param);\n}\nconst subst = c => String(c || '').replace(/\\{P\\}/g, param);\n\nconst autorizado = !!(regla && obj && !recuperado && paramOk);\nlet motivo = '';\nif (recuperado) motivo = 'Aviso de recuperacion de Zabbix';\nelse if (!regla) motivo = 'El trigger no es de los que atiende este flujo';\nelse if (!obj) motivo = 'Host sin objetivo configurado en este flujo';\nelse if (!paramOk) motivo = 'Parametro no permitido o no encontrado en el trigger (' + (regla.param ? 'verificar lista permitidos' : '') + ')';\n\nlet tEventoMs = null;\nif (eventTime) { const d = new Date(eventTime.replace(/\\./g, '-').replace(' ', 'T') + TZ_ZABBIX); if (!isNaN(d)) tEventoMs = d.getTime(); }\nconst o = obj || {};\nconst diagCmd = subst((regla && regla.diag_obj && regla.diag_obj[targetKey]) || (regla && regla.diag) || o.diag);\nreturn { json: {\n  autorizado, es_recuperacion: recuperado, motivo,\n  flujo: FLUJO, categoria: regla ? regla.categoria : '', tipo: (obj && obj.solo_diagnostico) ? 'diagnostico' : (regla ? regla.tipo : ''),\n  target: targetKey || '', so: o.so || '', etiqueta: (o.etiqueta || host || 'desconocido') + (param && regla && regla.param ? ' [' + param + ']' : ''),\n  param, diag_cmd: diagCmd,\n  reinicio_cmd: subst((regla && regla.reinicio) || o.reinicio),\n  verif_cmd: subst((regla && regla.verif) || o.verif),\n  esperado: (regla && regla.esperado) || o.esperado || '',\n  max: (regla && regla.max) || 2, ventana_min: (regla && regla.ventana_min) || 15, espera_s: (regla && regla.espera_s) || 30,\n  host, trigger, event_time: eventTime || '', t_evento_ms: tEventoMs, t_inicio_ms: Date.now()\n} };\n"
+      },
+      "id": "d78364ea-fc21-469c-858d-40e0a97ece49",
+      "name": "Validar objetivo e incidente",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2048,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.autorizado }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "6553a591-1ea5-4b5a-99ae-8eb7782022cd",
+      "name": "¿Incidente autorizado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -1824,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.target }}",
+        "rules": {
+          "rules": [
+            {
+              "value2": "db_ubuntu"
+            },
+            {
+              "value2": "db_windows",
+              "output": 1
+            }
+          ]
+        }
+      },
+      "id": "08b55c32-c9b3-4506-9e81-8a8a1f73e977",
+      "name": "Diagnostico por equipo",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        -1600,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=/usr/bin/systemctl is-active mariadb; /usr/bin/ss -lnt | /usr/bin/grep ':3306 '"
+      },
+      "id": "f3e74cae-5fed-4841-9653-0480f258bc98",
+      "name": "Diagnostico: MariaDB Ubuntu (VM-03)",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        -1360,
+        208
+      ],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "REEMPLAZAR",
+          "name": "SSH VM-03 MariaDB Ubuntu 2"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Analiza la salida del diagnostico y decide si se ejecuta la recuperacion.\nconst v = $('Validar objetivo e incidente').first().json;\nconst ssh = $json;\nconst out = String(ssh.stdout || '').trim();\nconst kv = {};\nout.split(/\\r?\\n/).forEach(l => { const m = l.match(/^(\\w+)=(.*)$/); if (m) kv[m[1]] = m[2].trim(); });\nconst sinDiag = !!ssh.error || out === '';\nlet diag;\nif (v.so === 'linux' || v.so === 'windows') {\n  const n = k => (kv[k] !== undefined && kv[k] !== '' && !isNaN(Number(kv[k]))) ? Number(kv[k]) : null;\n  const cpu = v.so === 'linux' ? (n('load1') !== null ? 'load1=' + n('load1') + ' (' + (n('cores') || 1) + ' nucleos)' : 'n/d') : (n('cpu_pct') !== null ? n('cpu_pct') + ' %' : 'n/d');\n  diag = ['CPU: ' + cpu, 'RAM disponible: ' + (n('mem_disp_pct') !== null ? n('mem_disp_pct') + ' %' : 'n/d'), 'Disco: ' + (n('disco_pct') !== null ? n('disco_pct') + ' % usado' : 'n/d'), kv.top ? 'Procesos top: ' + kv.top.replace(/,+$/, '') : null].filter(Boolean).join(' | ');\n} else {\n  diag = out.replace(/\\s+/g, ' ').slice(0, 250) || 'sin salida';\n}\nlet reiniciar = false, razon = '';\nif (v.tipo === 'servicio_caido') { reiniciar = true; razon = 'Servicio caido segun Zabbix' + (sinDiag ? ' (el diagnostico no respondio)' : ''); }\nelse if (v.tipo === 'lento') { reiniciar = !sinDiag; razon = sinDiag ? 'No se pudo ejecutar el diagnostico' + (ssh.error ? ': ' + String(ssh.error.message || ssh.error).slice(0, 120) : '') : 'Alerta sostenida de Zabbix (' + v.categoria + ')'; }\nelse { reiniciar = false; razon = sinDiag ? 'No se pudo ejecutar el diagnostico' : 'Esta alerta solo se diagnostica (sin recuperacion automatica)'; }\nreturn { json: { ...v, diag, reiniciar, razon, diag_ok: !sinDiag } };\n"
+      },
+      "id": "0f6688ce-fd03-487e-a2de-fd627466f6db",
+      "name": "Analizar diagnostico",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1120,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.reiniciar }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "c104ef4c-03ef-4d92-9d37-784732d8430f",
+      "name": "¿Ejecutar recuperación?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -896,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "REEMPLAZAR_CHAT_ID",
+        "text": "={{ (s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'))('🔎 DIAGNOSTICO (sin recuperacion automatica): ' + $json.etiqueta + ' | ' + $json.categoria + '\\nTrigger: ' + $json.trigger + '\\nDiagnostico: ' + $json.diag + '\\nDecision: ' + $json.razon + '\\nNo se modifico nada.') }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "316fa56a-bfd5-4195-a49d-aaa5ea3ddd15",
+      "name": "Aviso: diagnostico sin recuperación",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -688,
+        560
+      ],
+      "webhookId": "401dafa3-506f-48de-b140-5770bced7e72",
+      "credentials": {
+        "telegramApi": {
+          "id": "REEMPLAZAR",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const j = $json;\n\n// Primer paso por aquí = intento 1.\n// Si vuelve por el bucle, suma 1.\nconst intentoAnterior = Number(j.intento ?? 0);\nconst intentoActual = intentoAnterior + 1;\n\n// Máximo configurado. Si no viene, usa 4.\nconst maxIntentos = Number(j.max ?? j.max_reinicios ?? 4);\n\nreturn {\n  json: {\n    ...j,\n    intento: intentoActual,\n    intentos_en_ventana: intentoActual,\n    max: maxIntentos,\n    max_reinicios: maxIntentos\n  }\n};"
+      },
+      "id": "6acc95b6-a372-41e5-a9ab-61f11ba74344",
+      "name": "Control de reintentos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -688,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [],
+          "number": [
+            {
+              "value1": "={{ Number($json.intento ?? 0) }}",
+              "operation": "smallerEqual",
+              "value2": "={{ Number($json.max ?? 4) }}"
+            }
+          ]
+        }
+      },
+      "id": "98f96602-3b85-4af3-9f75-22073024490d",
+      "name": "¿Dentro del límite?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -464,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "REEMPLAZAR_CHAT_ID",
+        "text": "={{ (s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'))('🛑 LIMITE DE INTENTOS alcanzado para ' + $json.etiqueta + ' (' + $json.categoria + ').\\nMaximo ' + $json.max_reinicios + ' en ' + $json.ventana_min + ' min. Proximo intento automatico en ~' + $json.minutos_espera + ' min.\\nDiagnostico: ' + $json.diag + '\\nSe requiere intervencion humana.') }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "54c09e63-c91e-4096-bf8e-77f4c1db8c42",
+      "name": "Aviso: límite de intentos",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -240,
+        464
+      ],
+      "webhookId": "a873ee9c-d0b5-476b-82b0-678712ce2b57",
+      "credentials": {
+        "telegramApi": {
+          "id": "REEMPLAZAR",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.target }}",
+        "rules": {
+          "rules": [
+            {
+              "value2": "db_ubuntu"
+            },
+            {
+              "value2": "db_windows",
+              "output": 1
+            }
+          ]
+        }
+      },
+      "id": "3ffbe361-1e67-49b2-867e-9599cf733137",
+      "name": "Recuperación por equipo",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        -240,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=sudo -n /usr/bin/systemctl restart mariadb && sleep 3 && /usr/bin/systemctl is-active mariadb"
+      },
+      "id": "13b0e04b-0a9e-458e-a604-327e13f8c18f",
+      "name": "Recuperar: MariaDB Ubuntu (VM-03)",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "REEMPLAZAR",
+          "name": "SSH VM-03 MariaDB Ubuntu 2"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Se ejecuta despues del SSH de recuperacion.\nconst c = $('Control de reintentos').first().json;\nconst ssh = $json;   // { stdout, stderr, code } o { error } si no pudo conectarse\nlet error = '';\nif (ssh.error) error = String(ssh.error.message || ssh.error);\nelse if (ssh.code !== 0 && ssh.code !== undefined) error = String(ssh.stderr || ssh.stdout || 'codigo ' + ssh.code);\nreturn { json: { ...c, t_reinicio_ms: Date.now(), reinicio_ok: error === '', reinicio_error: error.slice(0, 300) } };\n"
+      },
+      "id": "8bb4f252-1831-4171-8245-d6608047d1a7",
+      "name": "Marcar hora de la accion",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $json.espera_s }}"
+      },
+      "id": "11311340-fc0a-4e87-a88d-b1afd7aecbc9",
+      "name": "Esperar",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        464,
+        208
+      ],
+      "webhookId": "34c861df-04e7-4c1c-a34e-8232f155c84c"
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.target }}",
+        "rules": {
+          "rules": [
+            {
+              "value2": "db_ubuntu"
+            },
+            {
+              "value2": "db_windows",
+              "output": 1
+            }
+          ]
+        }
+      },
+      "id": "b97f21cb-396c-433f-902f-f33cb0fb06e2",
+      "name": "Verificar por equipo",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        688,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "privateKey",
+        "command": "=/usr/bin/systemctl is-active mariadb && /usr/bin/ss -lnt | /usr/bin/grep -q ':3306 ' && echo '{\"Service\":\"Running\",\"Port3306\":true}' || echo '{\"Service\":\"Error\",\"Port3306\":false}'"
+      },
+      "id": "90a01c2e-bcbb-4773-84a5-06ab06baadba",
+      "name": "Verificar: MariaDB Ubuntu (VM-03)",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        928,
+        0
+      ],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "REEMPLAZAR",
+          "name": "SSH VM-03 MariaDB Ubuntu 2"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const r = $('Marcar hora de la accion').first().json;\nconst ssh = $json;\n\n// Primera línea devuelta por la verificación SSH\nconst l0 = String(ssh.stdout || '')\n  .trim()\n  .split(/\\r?\\n/)[0]\n  .trim();\n\n\n// ==================================================\n// VERIFICACION REAL\n// ==================================================\n\nconst verifOk =\n  r.esperado === 'num'\n    ? Number(l0) >= 1\n    : l0.toLowerCase() === String(r.esperado).toLowerCase();\n\nconst ok = !ssh.error && verifOk;\n\n\n// ==================================================\n// TEXTO DE VERIFICACION\n// ==================================================\n\nconst verificacion = ok\n  ? `Verificación correcta: ${l0 || 'servicio activo'}`\n  : (\n      ssh.error\n        ? `Error SSH durante la verificación: ${ssh.error}`\n        : `Verificación incorrecta. Obtenido: ${l0 || 'vacío'}`\n    );\n\n\n// ==================================================\n// TIEMPOS\n// ==================================================\n\nconst ahora = Date.now();\n\nconst ref =\n  r.t_evento_ms != null\n    ? r.t_evento_ms\n    : r.t_inicio_ms;\n\n\nconst seg = (a, b) =>\n  (a == null || b == null)\n    ? null\n    : Math.round((b - a) / 100) / 10;\n\n\nconst f = v =>\n  v == null\n    ? 'n/d'\n    : v + ' s';\n\n\nconst hora = ms =>\n  ms == null\n    ? 'n/d'\n    : new Date(ms - 6 * 3600 * 1000)\n        .toISOString()\n        .replace('T', ' ')\n        .slice(0, 19) + ' (CR)';\n\n\nconst tAccion =\n  seg(\n    ref,\n    r.t_reinicio_ms\n  );\n\n\nconst tTotal =\n  seg(\n    ref,\n    ahora\n  );\n\n\n// ==================================================\n// MENSAJE\n// ==================================================\n\nconst lin = [\n\n  (ok ? '✅ RECUPERADO: ' : '❌ FALLO: ') +\n    r.etiqueta +\n    ' | ' +\n    r.categoria,\n\n  'Trigger: ' +\n    r.trigger,\n\n  'Hora del evento: ' +\n    (\n      r.event_time\n        ? r.event_time + ' (Zabbix)'\n        : hora(r.t_inicio_ms) + ' (llegada a n8n)'\n    ),\n\n  (ok\n    ? 'Hora de recuperacion: '\n    : 'Hora del fallo: '\n  ) +\n    hora(ahora),\n\n  'Diagnostico: ' +\n    (r.diag || 'n/d'),\n\n  'Decision: ' +\n    (r.razon || 'n/d'),\n\n  'Accion: ' +\n    (\n      r.reinicio_ok\n        ? 'ejecutada'\n        : 'con error: ' +\n          (r.reinicio_error || 'desconocido')\n    ),\n\n  'Verificacion: ' +\n    verificacion,\n\n  'T-accion: ' +\n    f(tAccion) +\n    ' | T-total: ' +\n    f(tTotal),\n\n  ok\n    ? 'Nota: la alerta de Zabbix se cierra sola cuando el problema desaparece.'\n    : 'La recuperación automática no fue confirmada.',\n\n  'Intentos: ' +\n    (r.intentos_en_ventana ?? r.intento ?? 'n/d') +\n    ' de ' +\n    (r.max_reinicios ?? r.max ?? 4)\n\n];\n\n\n// ==================================================\n// SALIDA\n// ==================================================\n\nreturn {\n  json: {\n\n    ...r,\n\n    ok,\n\n    estado:\n      ok\n        ? 'RECUPERADO'\n        : 'FALLO',\n\n    verificacion,\n\n    tiempos: {\n      accion: tAccion,\n      total: tTotal\n    },\n\n    mensaje:\n      lin.join('\\n')\n\n  }\n};"
+      },
+      "id": "5f112862-7501-40f0-a3f9-e965b7409f91",
+      "name": "Armar resultado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1168,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.ok }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "dc38c086-9359-413b-b11b-960f881f8bb1",
+      "name": "¿Recuperado?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1392,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "REEMPLAZAR_CHAT_ID",
+        "text": "={{ (s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'))($json.mensaje) }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "e5127b9e-1eac-4c11-86a5-4ed8de693941",
+      "name": "Aviso: RECUPERADO",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1600,
+        128
+      ],
+      "webhookId": "ba3f14a6-aea4-422e-bacf-d11bcc433ef1",
+      "credentials": {
+        "telegramApi": {
+          "id": "REEMPLAZAR",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [],
+          "number": [
+            {
+              "value1": "={{ Number($json.intento ?? $json.intentos_en_ventana ?? 0) }}",
+              "value2": "={{ Number($json.max ?? $json.max_reinicios ?? 4) }}"
+            }
+          ]
+        }
+      },
+      "id": "e243edd5-5856-4d62-a65f-150264bc7713",
+      "name": "¿QUEDAN INTENTOS?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1616,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        448,
+        592
+      ],
+      "id": "aeea4168-dec4-4e24-8ed6-26e2c4491dfd",
+      "name": "ESPERAR REINTENTO",
+      "webhookId": "71a3ffac-0cae-4309-b52d-870587ec6439"
+    },
+    {
+      "parameters": {
+        "chatId": "REEMPLAZAR_CHAT_ID",
+        "text": "=🚨 INTERVENCIÓN MANUAL REQUERIDA  Equipo: {{$json.etiqueta}}  Categoría: {{$json.categoria}}  Trigger: {{$json.trigger}}  La recuperación automática falló después de {{$json.intento}} de {{$json.max}} intentos.  Última verificación: {{$json.verificacion}}  Estado: NO RECUPERADO  ⚠️ Se requiere intervención manual del administrador.",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "00962cb8-d5f2-4b59-93ab-44c9dc1c0ddf",
+      "name": "Aviso: INTERVENCIÓN MANUAL",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1936,
+        432
+      ],
+      "webhookId": "7f5ed0b4-4a7d-44a5-bb6f-d1b30dc6f4bf",
+      "credentials": {
+        "telegramApi": {
+          "id": "REEMPLAZAR",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook Zabbix (BD MariaDB)": {
+      "main": [
+        [
+          {
+            "node": "Validar objetivo e incidente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar objetivo e incidente": {
+      "main": [
+        [
+          {
+            "node": "¿Incidente autorizado?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Incidente autorizado?": {
+      "main": [
+        [
+          {
+            "node": "Diagnostico por equipo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Diagnostico por equipo": {
+      "main": [
+        [
+          {
+            "node": "Diagnostico: MariaDB Ubuntu (VM-03)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Diagnostico: MariaDB Ubuntu (VM-03)": {
+      "main": [
+        [
+          {
+            "node": "Analizar diagnostico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analizar diagnostico": {
+      "main": [
+        [
+          {
+            "node": "¿Ejecutar recuperación?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Ejecutar recuperación?": {
+      "main": [
+        [
+          {
+            "node": "Control de reintentos",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aviso: diagnostico sin recuperación",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Control de reintentos": {
+      "main": [
+        [
+          {
+            "node": "¿Dentro del límite?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Dentro del límite?": {
+      "main": [
+        [
+          {
+            "node": "Recuperación por equipo",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aviso: límite de intentos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recuperación por equipo": {
+      "main": [
+        [
+          {
+            "node": "Recuperar: MariaDB Ubuntu (VM-03)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Recuperar: MariaDB Ubuntu (VM-03)": {
+      "main": [
+        [
+          {
+            "node": "Marcar hora de la accion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marcar hora de la accion": {
+      "main": [
+        [
+          {
+            "node": "Esperar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Esperar": {
+      "main": [
+        [
+          {
+            "node": "Verificar por equipo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verificar por equipo": {
+      "main": [
+        [
+          {
+            "node": "Verificar: MariaDB Ubuntu (VM-03)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Verificar: MariaDB Ubuntu (VM-03)": {
+      "main": [
+        [
+          {
+            "node": "Armar resultado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar resultado": {
+      "main": [
+        [
+          {
+            "node": "¿Recuperado?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Recuperado?": {
+      "main": [
+        [
+          {
+            "node": "Aviso: RECUPERADO",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "¿QUEDAN INTENTOS?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿QUEDAN INTENTOS?": {
+      "main": [
+        [
+          {
+            "node": "ESPERAR REINTENTO",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aviso: INTERVENCIÓN MANUAL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ESPERAR REINTENTO": {
+      "main": [
+        [
+          {
+            "node": "Control de reintentos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "nodeGroups": [],
+  "tags": []
+}
