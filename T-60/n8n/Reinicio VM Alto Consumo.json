@@ -1,0 +1,647 @@
+{
+  "name": "Reinicio VM por alto consumo",
+  "nodes": [
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Inicializa el contexto del incidente y el contador.\nconst v = $('Validar alerta1').first().json;\n\nreturn {\n  json: {\n    ...v,\n    intento: 1,\n    max: 4,\n    t_inicio_ms: Date.now()\n  }\n};"
+      },
+      "id": "830b0b33-d4c4-4a7b-a174-1b83393895e5",
+      "name": "Preparar control de intentos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        576,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "17f1f739-96d5-4d92-9c25-1a70e520d8c4",
+              "leftValue": "={{ $json.modo_prueba }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "074faf9c-f163-4ccd-ad43-c89401ae1f9e",
+      "name": "¿MODO PRUEBA?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        864,
+        944
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// MODO PRUEBA:\n// no se llama al endpoint de reboot de Proxmox.\nreturn {\n  json: {\n    ...$json,\n    simulacion: true,\n    reboot_solicitado: false,\n    mensaje_simulacion: 'Reinicio de VM simulado; no se ejecutó ninguna acción real en Proxmox.'\n  }\n};"
+      },
+      "id": "fa66a3a9-c1eb-4eaf-92b7-fe4cabfc5c22",
+      "name": "Simular reinicio VM",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1184,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ==================================================\n// CONSERVAR CONTEXTO DEL INTENTO\n// ==================================================\n\nlet contexto;\n\n// Si venimos de un reintento, usar el intento más reciente.\ntry {\n  const retry = $('Control de reintentos').last().json;\n\n  if (\n    retry &&\n    retry.intento !== undefined &&\n    Number(retry.intento) > 1\n  ) {\n    contexto = retry;\n  }\n} catch (e) {\n  // Primer intento.\n}\n\n// Si es el primer intento, usar la inicialización.\nif (!contexto) {\n  contexto = $('Preparar control de intentos').first().json;\n}\n\n// En modo prueba, el input ya conserva el contexto.\n// En producción, el HTTP Request de reboot devuelve su propia respuesta,\n// así que reconstruimos el contexto con los nodos anteriores.\nreturn {\n  json: {\n    ...contexto,\n    t_reinicio_ms: Date.now(),\n    reboot_solicitado: !contexto.modo_prueba,\n    simulacion: contexto.modo_prueba === true\n  }\n};"
+      },
+      "id": "38a55aad-6be6-4b0a-b540-c74f5535c5f8",
+      "name": "Marcar intento de reinicio",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        576
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ==================================================\n// RESULTADO DE VERIFICACIÓN FALLIDA\n// ==================================================\n\nconst c = $('Marcar intento de reinicio').last().json;\nconst verificacion = $json;\n\nconst intentoActual = Number(c.intento ?? 1);\nconst maxIntentos = Number(c.max ?? 4);\nconst quedanIntentos = intentoActual < maxIntentos;\n\nconst statusVM =\n  verificacion?.data?.status ??\n  'sin respuesta';\n\nconst mensaje = [\n  '❌ T200 - VM NO RECUPERADA',\n  '',\n  'VM: ' + c.host,\n  'VMID: ' + c.vmid,\n  'Alerta: ' + c.trigger,\n  'Severidad: ' + c.severity,\n  '',\n  'Intento: ' + intentoActual + ' de ' + maxIntentos,\n  'Estado observado: ' + statusVM,\n  c.modo_prueba ? 'Modo: PRUEBA CONTROLADA (sin reinicio real)' : 'Modo: PRODUCCIÓN',\n  '',\n  quedanIntentos\n    ? 'La recuperación automática volverá a intentarse.'\n    : 'Se agotaron los 4 intentos automáticos. Se requiere intervención manual.'\n].join('\\n');\n\nreturn {\n  json: {\n    ...c,\n    intento: intentoActual,\n    max: maxIntentos,\n    quedan_intentos: quedanIntentos,\n    estado_vm: statusVM,\n    mensaje\n  }\n};"
+      },
+      "id": "cab156e0-eaf5-41e2-8545-3acad8de0470",
+      "name": "Armar resultado (fallo)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1856,
+        576
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "340f54da-4153-4f3a-8886-166aeab29c77",
+              "leftValue": "={{ $json.intento }}",
+              "rightValue": "=4",
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "36e12549-b5f9-4a21-ad4f-b9a2a84e53ad",
+      "name": "¿QUEDAN INTENTOS?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2080,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $json.modo_prueba ? 2 : 10 }}"
+      },
+      "id": "50f6286b-53a6-455e-b167-d770e6c4c449",
+      "name": "ESPERAR REINTENTO",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2384,
+        576
+      ],
+      "webhookId": "1ccba59e-f69c-4565-88a1-3424ccb3937b"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const j = $json;\n\nreturn {\n  json: {\n    ...j,\n    intento: Number(j.intento ?? 1) + 1,\n    max: 4\n  }\n};"
+      },
+      "id": "2f2aaa5f-023a-4b7a-aeee-9e312bf17fac",
+      "name": "Control de reintentos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2608,
+        576
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "zabbix-reinicio-vm-recursos",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        -576,
+        784
+      ],
+      "id": "d32cce85-4adf-4762-bb71-3051bd1566dd",
+      "name": "Webhook1",
+      "webhookId": "9c33c3e3-6dec-429b-ad6f-89cb44fabed9"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://10.50.80.112:8006/api2/json/nodes/{{$('Validar alerta1').first().json.node}}/qemu/{{$('Validar alerta1').first().json.vmid}}/status/reboot",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=PVEAPIToken=REEMPLAZAR_USUARIO@pve!REEMPLAZAR_TOKEN_ID=REEMPLAZAR_SECRETO"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        816,
+        448
+      ],
+      "id": "47399577-6041-4bb3-bc1f-019dc66d5134",
+      "name": "Reiniciar VM Proxmox1"
+    },
+    {
+      "parameters": {
+        "amount": "={{ $('Marcar intento de reinicio').last().json.modo_prueba ? 2 : 60 }}"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1040,
+        448
+      ],
+      "id": "b80acc02-1452-4b66-b5b3-3b072165679d",
+      "name": "Esperar reinicio1",
+      "webhookId": "8a50f200-5a84-498d-9e4b-3548ecbae873"
+    },
+    {
+      "parameters": {
+        "url": "=https://10.50.80.112:8006/api2/json/nodes/{{$('Validar alerta1').first().json.node}}/qemu/{{$('Validar alerta1').first().json.vmid}}/status/current",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "PVEAPIToken=REEMPLAZAR_USUARIO@pve!REEMPLAZAR_TOKEN_ID=REEMPLAZAR_SECRETO"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1264,
+        448
+      ],
+      "id": "13f2e10b-7712-484e-a1cc-f10a8047b5f8",
+      "name": "Verificar VM1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "263ab75c-ad65-4e72-9fc8-8dc61aa4053a",
+              "leftValue": "={{ $('Marcar intento de reinicio').last().json.modo_prueba ? false : ($json.data.status === 'running') }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1488,
+        448
+      ],
+      "id": "95e1dca4-a3c5-4172-9a77-0fdf4c7c817f",
+      "name": "¿VM volvió a Running?1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ==================================================\n// VALIDAR ALERTA - REINICIO VM POR ALTO CONSUMO\n// ==================================================\n//\n// MODO_PRUEBA = true:\n//   - NO reinicia ninguna VM real.\n//   - Fuerza la verificación final por la rama FALSE.\n//   - Permite probar los 4 intentos de forma segura.\n//\n// PARA PRODUCCIÓN:\n//   cambiar SOLO esta línea a false.\n// ==================================================\n\nconst MODO_PRUEBA = false;\n\nconst b = $json.body ?? $json;\n\nconst host = String(b.host ?? \"\").trim();\nconst trigger = String(b.trigger ?? \"\");\nconst severity = String(b.severity ?? \"\").toLowerCase();\n\n// VMIDs reales en Proxmox\nconst vms = {\n  \"VM-AD-DNS\": 102,\n  \"EspoCRM-Windows\": 103,\n  \"EspoCRM-Ubuntu\": 104,\n  \"MariaDB-Windows\": 105,\n  \"MariaDB-Ubuntu\": 106,\n  \"Zabbix server\": 107,\n  \"VM-n8n\": 108,\n  \"VM-RPA\": 109,\n  \"VM-Grafana\": 110\n};\n\nconst vmid = vms[host];\n\nconst severidadOK = [\n  \"warning\",\n  \"advertencia\",\n  \"average\",\n  \"promedio\",\n  \"high\",\n  \"alta\",\n  \"disaster\",\n  \"desastre\",\n  \"2\",\n  \"3\",\n  \"4\",\n  \"5\"\n].includes(severity);\n\n// Solo alertas relacionadas con consumo de recursos\nconst recursoOK =\n  /cpu|processor|procesador|memory|memoria|ram|swap|load average/i.test(trigger);\n\nlet autorizado = true;\nlet motivo = \"Autorizada\";\n\nif (!vmid) {\n  autorizado = false;\n  motivo = `Host no registrado: ${host}`;\n} else if (!severidadOK) {\n  autorizado = false;\n  motivo = `Severidad no autorizada: ${b.severity}`;\n} else if (!recursoOK) {\n  autorizado = false;\n  motivo = \"La alerta no corresponde a consumo de recursos\";\n}\n\nreturn [{\n  json: {\n    autorizado,\n    motivo,\n    host,\n    trigger,\n    severity: b.severity,\n    eventid: b.eventid,\n    vmid,\n    node: \"server-integrador3\",\n    modo_prueba: MODO_PRUEBA,\n    intento: 1,\n    max: 4\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -336,
+        784
+      ],
+      "id": "83b31dff-b03a-4db0-951f-592e8fafc153",
+      "name": "Validar alerta1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "54d3b0a0-62fa-4292-b840-d1538784cadc",
+              "leftValue": "={{ $json.autorizado }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -112,
+        784
+      ],
+      "id": "9433fe58-3d00-45d7-b711-1c0333455faa",
+      "name": "¿Alerta autorizada?1"
+    },
+    {
+      "parameters": {
+        "url": "=https://10.50.80.112:8006/api2/json/nodes/{{$('Validar alerta1').first().json.node}}/qemu/{{$('Validar alerta1').first().json.vmid}}/status/current",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "PVEAPIToken=REEMPLAZAR_USUARIO@pve!REEMPLAZAR_TOKEN_ID=REEMPLAZAR_SECRETO"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        96,
+        624
+      ],
+      "id": "4b835293-f4ec-4443-8376-04b5df3d9bee",
+      "name": "Consultar VM antes del reinicio1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "4a26352b-b117-4a5c-bc5a-f87bcd6a4d92",
+              "leftValue": "={{ $('Validar alerta1').first().json.modo_prueba ? true : Number($json.data.uptime) >= 1800 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        288,
+        560
+      ],
+      "id": "ea7b3c9c-61f2-40b7-a50b-55773a2fd077",
+      "name": "¿Fuera del cooldown?1"
+    },
+    {
+      "parameters": {
+        "chatId": "REEMPLAZAR_CHAT_ID",
+        "text": "=✅ T200 - VM RECUPERADA\n\nVM: {{ $('Validar alerta1').first().json.host }}\nVMID: {{ $('Validar alerta1').first().json.vmid }}\nAlerta: {{ $('Validar alerta1').first().json.trigger }}\nSeveridad: {{ $('Validar alerta1').first().json.severity }}\n\nAcción: Reinicio automático mediante Proxmox\nEstado: VM nuevamente Running\nIntento exitoso: {{ $('Marcar intento de reinicio').last().json.intento }} de 4\n\nHora: {{ $now.toISO() }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1792,
+        272
+      ],
+      "id": "9d52d71d-55dc-4bec-a086-a35078d2b336",
+      "name": "Telegram TRUE1",
+      "webhookId": "e4005d2b-7e3a-43d5-8427-1c0d77457fe6",
+      "credentials": {
+        "telegramApi": {
+          "id": "REEMPLAZAR",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "REEMPLAZAR_CHAT_ID",
+        "text": "=🛑 T200 - INTERVENCIÓN MANUAL REQUERIDA\n\nLa VM no pudo recuperarse automáticamente después de 4 intentos.\n\nVM: {{$json.host}}\nVMID: {{$json.vmid}}\nAlerta: {{$json.trigger}}\nSeveridad: {{$json.severity}}\nIntentos realizados: {{$json.intento}} de {{$json.max}}\nEstado observado: {{$json.estado_vm}}\n\nSe agotaron los intentos automáticos de recuperación.\nNo se ejecutará ningún intento adicional.\n\n{{$json.modo_prueba ? 'PRUEBA CONTROLADA: no se reinició ninguna VM real.' : 'Se requiere revisión manual en Proxmox.'}}\n\nHora: {{$now.toISO()}}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1760,
+        928
+      ],
+      "id": "2e0a5ba5-c6b2-4b66-899d-d3faebfee920",
+      "name": "Telegram FALSE1",
+      "webhookId": "e4005d2b-7e3a-43d5-8427-1c0d77457fe6",
+      "credentials": {
+        "telegramApi": {
+          "id": "REEMPLAZAR",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Preparar control de intentos": {
+      "main": [
+        [
+          {
+            "node": "¿MODO PRUEBA?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿MODO PRUEBA?": {
+      "main": [
+        [
+          {
+            "node": "Simular reinicio VM",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reiniciar VM Proxmox1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simular reinicio VM": {
+      "main": [
+        [
+          {
+            "node": "Marcar intento de reinicio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marcar intento de reinicio": {
+      "main": [
+        [
+          {
+            "node": "Esperar reinicio1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar resultado (fallo)": {
+      "main": [
+        [
+          {
+            "node": "¿QUEDAN INTENTOS?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿QUEDAN INTENTOS?": {
+      "main": [
+        [
+          {
+            "node": "ESPERAR REINTENTO",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram FALSE1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ESPERAR REINTENTO": {
+      "main": [
+        [
+          {
+            "node": "Control de reintentos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Control de reintentos": {
+      "main": [
+        [
+          {
+            "node": "¿MODO PRUEBA?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook1": {
+      "main": [
+        [
+          {
+            "node": "Validar alerta1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reiniciar VM Proxmox1": {
+      "main": [
+        [
+          {
+            "node": "Marcar intento de reinicio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Esperar reinicio1": {
+      "main": [
+        [
+          {
+            "node": "Verificar VM1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verificar VM1": {
+      "main": [
+        [
+          {
+            "node": "¿VM volvió a Running?1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿VM volvió a Running?1": {
+      "main": [
+        [
+          {
+            "node": "Telegram TRUE1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Armar resultado (fallo)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar alerta1": {
+      "main": [
+        [
+          {
+            "node": "¿Alerta autorizada?1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Alerta autorizada?1": {
+      "main": [
+        [
+          {
+            "node": "Consultar VM antes del reinicio1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar VM antes del reinicio1": {
+      "main": [
+        [
+          {
+            "node": "¿Fuera del cooldown?1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Fuera del cooldown?1": {
+      "main": [
+        [
+          {
+            "node": "Preparar control de intentos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "nodeGroups": [],
+  "tags": []
+}
